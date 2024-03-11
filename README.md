@@ -1,21 +1,22 @@
 # RDPHoneyPot
-Simple RDP honeypot for attracting, analyzing, and inspecting RDP-based attacks written in C#
 
-# Features
-1. Performs basic protol mocking, allowing to destinguish RDP clients/RDP exploits from port scanners.
-2. Auto-Applying ban for IP addresses already logged in the database (RDP exploiters only, port scanners are still allowed)
-3. Built with .NET 8 and C#
-4. Stores IP addresses, timestamps, and connection types in a SQLite database for analysis.
+A simple RDP honeypot designed to attract, analyze, and inspect RDP-based attacks, developed in C#.
 
-# Getting Started
-Prerequisites:
-1.NET 8.0 SDK
-Clone: Get the code from this repository.
-Customize.
-Build in Visual Studio.
+## Features
 
-# Use Responsibly
-This honeypot is a tool for security research. Deploy it in controlled environments with appropriate security measures.
+- **Protocol Mocking**: Performs basic protocol mocking to distinguish RDP clients/exploits from port scanners.
+- **Auto-Ban**: Automatically applies bans to IP addresses previously logged in the database as RDP exploiters. Port scanners are still allowed.
+- **Framework**: Built with .NET 8 and C#, ensuring a robust and modern development foundation.
+- **Data Storage**: Stores IP addresses, timestamps, and connection types in a SQLite database for detailed analysis.
+![Screenshot](screenshot.png)
 
-# License
-MIT License
+## Getting Started
+### Prerequisites
+
+- .NET 8.0 SDK
+
+### Setup
+
+1. **Clone**: Obtain the code from this repository.
+2. **Customize**: Adjust the configuration as needed.
+3. **Build**: Use Visual Studio to compile and prepare the honeypot.
