@@ -4,10 +4,11 @@ A simple RDP honeypot designed to attract, analyze, and inspect RDP-based attack
 
 ## Features
 
-- **Protocol Mocking**: Performs basic protocol mocking to distinguish RDP clients/exploits from port scanners.
-- **Auto-Ban**: Automatically applies bans to IP addresses previously logged in the database as RDP exploiters. Port scanners are still allowed.
-- **Framework**: Built with .NET 8 and C#, ensuring a robust and modern development foundation.
-- **Data Storage**: Stores IP addresses, timestamps, and connection types in a SQLite database for detailed analysis.
+- Performs basic protocol mocking to distinguish RDP clients/exploits from port scanners.
+- Automatically applies bans to IP addresses previously logged in the database as RDP exploiters. Port scanners are still allowed.
+- Built with .NET 8 and C#, ensuring a robust and modern development foundation.
+- Stores IP addresses, timestamps, and connection types in a SQLite database for detailed analysis.
+
 ![Screenshot](screenshot.png)
 
 ## Getting Started
