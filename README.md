@@ -38,7 +38,7 @@ Choose one of the following:
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/your-username/RDPHoneyPot.git
+   git clone https://github.com/dmitryporotnikov/RDPHoneyPot.git
    cd RDPHoneyPot
    ```
 
