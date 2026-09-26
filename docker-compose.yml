@@ -6,12 +6,13 @@ services:
       dockerfile: Dockerfile
     container_name: rdphoney
     restart: unless-stopped
-    ports:
-      - "${HONEYPOT_PORT:-3389}:3389"
+    # Use host network mode on Linux so the honeypot receives the real client IP (avoids docker-proxy SNAT)
+    network_mode: host
     environment:
       - DATABASE_PATH=/app/data/RdpHoneypotLogs.db
-      - HONEYPOT_PORT=3389
+      - HONEYPOT_PORT=${HONEYPOT_PORT:-3389}
       - STATIC_JPG_PATH=/app/assets/desktop.jpg
+      - AUTO_BAN_RDP_CLIENTS=${AUTO_BAN_RDP_CLIENTS:-true}
     volumes:
       # Host bind mount: exposes database directly on host machine (./data/RdpHoneypotLogs.db)
       - ./data:/app/data
@@ -23,21 +24,14 @@ services:
     image: ghcr.io/coleifer/sqlite-web:latest
     container_name: rdphoney-db-admin
     restart: unless-stopped
-    ports:
-      - "${DB_ADMIN_PORT:-8080}:8080"
+    network_mode: host
     volumes:
       - ./data:/data
     entrypoint:
       - /bin/sh
       - -c
       - |
-        if [ ! -f /data/RdpHoneypotLogs.db ]; then
-          python -c "import sqlite3; conn = sqlite3.connect('/data/RdpHoneypotLogs.db'); conn.close()"
-        fi
-        if command -v sqlite_web > /dev/null 2>&1; then
-          exec sqlite_web -H 0.0.0.0 -p 8080 /data/RdpHoneypotLogs.db --read-only=false
-        else
-          exec sqlite_wsgi -H 0.0.0.0 -p 8080 /data/RdpHoneypotLogs.db
-        fi
+        touch /data/RdpHoneypotLogs.db
+        exec sqlite_web -H 0.0.0.0 -p ${DB_ADMIN_PORT:-8080} -x /data/RdpHoneypotLogs.db
     depends_on:
       - rdphoney

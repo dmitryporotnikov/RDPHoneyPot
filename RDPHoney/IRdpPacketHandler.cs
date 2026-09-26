@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 
@@ -102,10 +103,17 @@ namespace RDPHoney
                         return;
                     }
 
-                    Console.WriteLine($"RDP Connection Request received from {clientIP}. Initiating TLS negotiation...");
+                    // Extract client source reference from X.224 CR (bytes 8 and 9) to echo back in CC
+                    ushort clientSrcRef = 0;
+                    if (bytesRead >= 10)
+                    {
+                        clientSrcRef = (ushort)(buffer[8] | (buffer[9] << 8));
+                    }
 
-                    // 2. Respond with X.224 Connection Confirm specifying PROTOCOL_SSL (0x01)
-                    byte[] ccPacket = RdpPacketHelper.BuildX224ConnectionConfirm(0x1234, RdpProtocolConstants.PROTOCOL_SSL);
+                    Console.WriteLine($"RDP Connection Request received from {clientIP} (src-ref: 0x{clientSrcRef:X4}). Initiating TLS negotiation...");
+
+                    // 2. Respond with X.224 Connection Confirm specifying PROTOCOL_SSL (0x01) and echoing client's src-ref
+                    byte[] ccPacket = RdpPacketHelper.BuildX224ConnectionConfirm(clientSrcRef, RdpProtocolConstants.PROTOCOL_SSL);
                     rawStream.Write(ccPacket, 0, ccPacket.Length);
                     rawStream.Flush();
 
@@ -113,16 +121,19 @@ namespace RDPHoney
                     using var sslStream = new SslStream(rawStream, false);
                     try
                     {
-                        sslStream.AuthenticateAsServer(
-                            TlsCertificateManager.ServerCertificate,
-                            clientCertificateRequired: false,
-                            enabledSslProtocols: SslProtocols.Tls12 | SslProtocols.Tls13,
-                            checkCertificateRevocation: false);
+                        var authOptions = new SslServerAuthenticationOptions
+                        {
+                            ServerCertificate = TlsCertificateManager.ServerCertificate,
+                            ClientCertificateRequired = false,
+                            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                            EnabledSslProtocols = SslProtocols.None // Allow OS to negotiate best mutually supported TLS version
+                        };
+                        sslStream.AuthenticateAsServer(authOptions);
                     }
                     catch (Exception tlsEx)
                     {
-                        Console.WriteLine($"TLS Handshake failed with {clientIP}: {tlsEx.Message}. Logging as RDPClient.");
-                        DatabaseLogger.LogConnection(clientIP, "RDPClient");
+                        Console.WriteLine($"TLS Handshake failed with {clientIP}: {tlsEx.Message}. Logging attempt.");
+                        DatabaseLogger.LogConnection(clientIP, "TLSFailed");
                         return;
                     }
 

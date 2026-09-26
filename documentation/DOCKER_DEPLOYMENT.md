@@ -61,12 +61,17 @@ Copy the example environment file:
 ```bash
 cp .env.example .env
 ```
-Edit `.env` if you wish to customize ports:
+Edit `.env` if you wish to customize ports or disable auto-banning during initial testing:
 ```ini
 HONEYPOT_PORT=3389
 DB_ADMIN_PORT=8080
 DATABASE_PATH=/app/data/RdpHoneypotLogs.db
+# Disable auto-ban while testing from your management machine
+AUTO_BAN_RDP_CLIENTS=false
 ```
+
+> **Note on Real Client IP Preservation**:
+> In standard Docker bridge networking, Docker's userland proxy applies Source NAT (SNAT), making all incoming connections appear to originate from the Docker gateway/bridge IP (e.g. `192.168.3.0` or `172.x.x.x`). `docker-compose.yml` uses **`network_mode: host`** on Linux, enabling the honeypot to see the actual attacker/client IP address directly from the kernel network stack without NAT.
 
 ### Step 3: Build and Start Containers
 ```bash
