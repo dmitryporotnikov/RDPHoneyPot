@@ -4,7 +4,7 @@ using System.Text;
 
 namespace RDPHoney
 {
-    // Purpose: Builds and parses RDP packets (TPKT, X.224, MCS, Licensing, Capabilities, Input).
+    // Purpose: Builds and parses RDP packets (TPKT, X.224, MCS, Licensing, Capabilities, Finalization, Input).
     //
     // Dmitry Porotnikov
 
@@ -15,18 +15,58 @@ namespace RDPHoney
             int totalLength = 4 + 3 + payload.Length;
             byte[] packet = new byte[totalLength];
 
-            // TPKT Header
+            // TPKT Header (4 bytes)
             packet[0] = RdpProtocolConstants.TPKT_VERSION;
             packet[1] = 0x00;
             packet[2] = (byte)((totalLength >> 8) & 0xFF);
             packet[3] = (byte)(totalLength & 0xFF);
 
-            // X.224 Data TPDU
+            // X.224 Data TPDU (3 bytes)
             packet[4] = 0x02; // Length
             packet[5] = RdpProtocolConstants.X224_TPDU_DT; // 0xF0 Data
             packet[6] = 0x80; // EOT
 
             Buffer.BlockCopy(payload, 0, packet, 7, payload.Length);
+            return packet;
+        }
+
+        public static byte[] WrapSendDataIndication(byte[] userData, ushort userId = 1002, ushort channelId = 1003)
+        {
+            // MCS SendDataIndication header length:
+            // 1 (choice 0x68) + 2 (initiator) + 2 (channelId) + 1 (dataPriority) + 2 (PER length) = 8 bytes
+            int mcsHeaderLen = 8;
+            int totalLength = 4 + 3 + mcsHeaderLen + userData.Length;
+            byte[] packet = new byte[totalLength];
+
+            // 1. TPKT Header (4 bytes)
+            packet[0] = RdpProtocolConstants.TPKT_VERSION; // 0x03
+            packet[1] = 0x00;
+            packet[2] = (byte)((totalLength >> 8) & 0xFF);
+            packet[3] = (byte)(totalLength & 0xFF);
+
+            // 2. X.224 Data TPDU (3 bytes)
+            packet[4] = 0x02; // Length
+            packet[5] = RdpProtocolConstants.X224_TPDU_DT; // 0xF0
+            packet[6] = 0x80; // EOT
+
+            // 3. MCS SendDataIndication (8 bytes)
+            // PER choice: DomainMCSPDU_SendDataIndication (26) << 2 = 0x68
+            packet[7] = RdpProtocolConstants.MCS_SEND_DATA_INDICATION; // 0x68
+            ushort initiatorOffset = (ushort)(userId - 1001);
+            packet[8] = (byte)((initiatorOffset >> 8) & 0xFF); // 0x00
+            packet[9] = (byte)(initiatorOffset & 0xFF);        // 0x01
+            packet[10] = (byte)((channelId >> 8) & 0xFF);      // 0x03
+            packet[11] = (byte)(channelId & 0xFF);             // 0xEB
+            packet[12] = 0x70; // dataPriority (medium) | segmentation (begin | end)
+
+            // PER length of userData (2 bytes big-endian: userData.Length | 0x8000)
+            int perLen = userData.Length | 0x8000;
+            packet[13] = (byte)((perLen >> 8) & 0xFF);
+            packet[14] = (byte)(perLen & 0xFF);
+
+            // 4. UserData
+            Buffer.BlockCopy(userData, 0, packet, 15, userData.Length);
+
             return packet;
         }
 
@@ -140,26 +180,25 @@ namespace RDPHoney
         public static byte[] BuildServerLicenseValidClientPDU()
         {
             using var ms = new MemoryStream();
-            // MCS SendDataIndication header
-            ms.Write(new byte[] {
-                RdpProtocolConstants.MCS_SEND_DATA_INDICATION, // 0x68
-                0x00, 0x01, // Initiator 1002
-                0x03, 0xEB, // Channel 1003 (I/O)
-                0x70 // Priority / flags
-            }, 0, 6);
 
-            // Security Header: SEC_LICENSE_PKT (0x0080)
+            // Security Header (4 bytes): SEC_LICENSE_PKT (0x0080)
             ms.Write(new byte[] { 0x80, 0x00, 0x00, 0x00 }, 0, 4);
 
-            // License Error PDU: STATUS_VALID_CLIENT (0x00000007)
-            ms.WriteByte(0xFF); // LICENSE_ERR_MSG
-            ms.WriteByte(0x03); // LICENSE_VERSION_3_0
-            ms.Write(new byte[] { 0x14, 0x00 }, 0, 2); // wMsgSize = 20
-            ms.Write(new byte[] { 0x07, 0x00, 0x00, 0x00 }, 0, 4); // dwErrorCode = STATUS_VALID_CLIENT
-            ms.Write(new byte[] { 0x02, 0x00, 0x00, 0x00 }, 0, 4); // dwStateTransition = ST_NO_TRANSITION
-            ms.Write(new byte[] { 0x00, 0x00, 0x00, 0x00 }, 0, 4); // bbErrorInfo
+            // License Error PDU (16 bytes):
+            // bMsgType = ERROR_ALERT (0xFF)
+            ms.WriteByte(0xFF);
+            // flags = PREAMBLE_VERSION_3_0 (0x03)
+            ms.WriteByte(0x03);
+            // wMsgSize = 16 (0x10, 0x00)
+            ms.Write(new byte[] { 0x10, 0x00 }, 0, 2);
+            // dwErrorCode = STATUS_VALID_CLIENT (0x00000007)
+            ms.Write(new byte[] { 0x07, 0x00, 0x00, 0x00 }, 0, 4);
+            // dwStateTransition = ST_NO_TRANSITION (0x00000002)
+            ms.Write(new byte[] { 0x02, 0x00, 0x00, 0x00 }, 0, 4);
+            // bbErrorInfo = wBlobType=0, wBlobLen=0
+            ms.Write(new byte[] { 0x00, 0x00, 0x00, 0x00 }, 0, 4);
 
-            return WrapTpktX224Data(ms.ToArray());
+            return WrapSendDataIndication(ms.ToArray(), 1002, 1003);
         }
 
         public static byte[] BuildDemandActivePDU(int width, int height)
@@ -169,131 +208,166 @@ namespace RDPHoney
             // 1. General Capability Set (24 bytes)
             capMs.Write(new byte[] {
                 0x01, 0x00, 0x18, 0x00, // type=1, len=24
-                0x01, 0x00, // OS Major = Windows
-                0x04, 0x00, // OS Minor = Windows Server
-                0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                0x01, 0x00, // osMajorType = OSMAJORTYPE_WINDOWS (1)
+                0x03, 0x00, // osMinorType = OSMINORTYPE_WINDOWS_NT (3)
+                0x00, 0x02, // protocolVersion = TS_CAPS_PROTOCOLVERSION (0x0200)
+                0x00, 0x00, // pad2OctetsA
+                0x00, 0x00, // generalCompressionTypes
+                0x0D, 0x04, // extraFlags = 0x040D (FASTPATH_OUTPUT_SUPPORTED | NO_BITMAP_COMPRESSION_HDR | LONG_CREDENTIALS | AUTORECONNECT)
+                0x00, 0x00, // updateCapabilityFlag
+                0x00, 0x00, // remoteUnshareFlag
+                0x00, 0x00, // generalCompressionLevel
+                0x01,       // refreshRectSupport = 1
+                0x01        // suppressOutputSupport = 1
             }, 0, 24);
 
             // 2. Bitmap Capability Set (28 bytes)
             capMs.Write(new byte[] {
                 0x02, 0x00, 0x1C, 0x00, // type=2, len=28
                 0x18, 0x00, // prefBitsPerPixel = 24
-                0x01, 0x00, // receive1BitPerPixel = true
-                0x01, 0x00, // receive4BitsPerPixel = true
-                0x01, 0x00, // receive8BitsPerPixel = true
-                (byte)(width & 0xFF), (byte)((width >> 8) & 0xFF), // desktopWidth
+                0x01, 0x00, // receive1BitPerPixel = 1
+                0x01, 0x00, // receive4BitsPerPixel = 1
+                0x01, 0x00, // receive8BitsPerPixel = 1
+                (byte)(width & 0xFF), (byte)((width >> 8) & 0xFF),   // desktopWidth
                 (byte)(height & 0xFF), (byte)((height >> 8) & 0xFF), // desktopHeight
-                0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00
+                0x00, 0x00, // pad2Octets
+                0x01, 0x00, // desktopResizeFlag = 1
+                0x01, 0x00, // bitmapCompressionFlag = 1
+                0x00,       // highColorFlags = 0
+                0x08,       // drawingFlags = DRAW_ALLOW_DYNAMIC_COLOR_FIDELITY (0x08)
+                0x01, 0x00, // multipleRectangleSupport = 1
+                0x00, 0x00  // pad2OctetsB
             }, 0, 28);
 
             // 3. Order Capability Set (88 bytes)
             byte[] orderCap = new byte[88];
-            orderCap[0] = 0x03; orderCap[1] = 0x00; orderCap[2] = 88; orderCap[3] = 0x00; // type=3, len=88
+            orderCap[0] = 0x03; orderCap[1] = 0x00; // type = 3
+            orderCap[2] = 88; orderCap[3] = 0x00;   // length = 88
+            orderCap[24] = 0x01; orderCap[26] = 20; // granularity
+            orderCap[30] = 0x01;                    // maximumOrderLevel = 1
+            orderCap[34] = 0x2A;                    // orderFlags
+            orderCap[76] = 0x00; orderCap[77] = 0x84; orderCap[78] = 0x03; orderCap[79] = 0x00; // desktopSaveSize = 230400
             capMs.Write(orderCap, 0, orderCap.Length);
 
             // 4. Pointer Capability Set (10 bytes)
             capMs.Write(new byte[] {
                 0x08, 0x00, 0x0A, 0x00, // type=8, len=10
-                0x01, 0x00, 0x14, 0x00, 0x14, 0x00
+                0x01, 0x00, // colorPointerFlag = 1
+                0x14, 0x00, // colorPointerCacheSize = 20
+                0x14, 0x00  // pointerCacheSize = 20
             }, 0, 10);
 
             // 5. Input Capability Set (88 bytes)
             byte[] inputCap = new byte[88];
-            inputCap[0] = 0x0D; inputCap[1] = 0x00; inputCap[2] = 88; inputCap[3] = 0x00; // type=13, len=88
-            inputCap[4] = 0x35; inputCap[5] = 0x00; // inputFlags: SCANCODES | FASTPATH
+            inputCap[0] = 0x0D; inputCap[1] = 0x00; // type = 13
+            inputCap[2] = 88; inputCap[3] = 0x00;   // length = 88
+            inputCap[4] = 0x35; inputCap[5] = 0x00; // inputFlags = 0x0035 (SCANCODES | FASTPATH | FASTPATH2 | UNICODE)
+            inputCap[8] = 0x09; inputCap[9] = 0x04; // keyboardLayout = 0x0409 (US English)
+            inputCap[12] = 0x04;                    // keyboardType = 4
+            inputCap[20] = 12;                      // functionKeys = 12
             capMs.Write(inputCap, 0, inputCap.Length);
 
             byte[] capsData = capMs.ToArray();
 
             using var pduMs = new MemoryStream();
-            // MCS SendDataIndication Header
-            pduMs.Write(new byte[] {
-                RdpProtocolConstants.MCS_SEND_DATA_INDICATION,
-                0x00, 0x01, 0x03, 0xEB, 0x70
-            }, 0, 6);
-
-            // Share Control Header
-            ushort shareLen = (ushort)(18 + 4 + capsData.Length);
-            pduMs.WriteByte((byte)(shareLen & 0xFF));
-            pduMs.WriteByte((byte)((shareLen >> 8) & 0xFF));
+            // Share Control Header (6 bytes)
+            ushort totalLen = (ushort)(6 + 16 + capsData.Length);
+            pduMs.WriteByte((byte)(totalLen & 0xFF));
+            pduMs.WriteByte((byte)((totalLen >> 8) & 0xFF));
             pduMs.WriteByte(0x11); // TS_PDUTYPE_DEMANDACTIVEPDU
             pduMs.WriteByte(0x00);
             pduMs.Write(new byte[] { 0xEB, 0x03 }, 0, 2); // pduSource = 1003
 
-            // Demand Active PDU data
+            // Demand Active PDU data (16 bytes + capsData.Length)
             pduMs.Write(new byte[] { 0xEA, 0x03, 0x01, 0x00 }, 0, 4); // shareId = 0x000103EA
             pduMs.Write(new byte[] { 0x04, 0x00 }, 0, 2); // lengthSourceDescriptor = 4
             pduMs.Write(new byte[] { (byte)(capsData.Length & 0xFF), (byte)((capsData.Length >> 8) & 0xFF) }, 0, 2);
             pduMs.Write(Encoding.ASCII.GetBytes("RDP\0"), 0, 4); // sourceDescriptor
-            pduMs.Write(new byte[] { 0x05, 0x00, 0x00, 0x00 }, 0, 4); // numberCapabilities = 5, pad
+            pduMs.Write(new byte[] { 0x05, 0x00, 0x00, 0x00 }, 0, 4); // numberCapabilities = 5, pad2Octets = 0
             pduMs.Write(capsData, 0, capsData.Length);
 
-            return WrapTpktX224Data(pduMs.ToArray());
+            return WrapSendDataIndication(pduMs.ToArray(), 1002, 1003);
         }
 
-        public static byte[] BuildSynchronizePDU()
+        public static byte[] BuildSynchronizePDU(uint shareId = 0x000103EA, ushort userId = 1002)
         {
             using var ms = new MemoryStream();
-            ms.Write(new byte[] { RdpProtocolConstants.MCS_SEND_DATA_INDICATION, 0x00, 0x01, 0x03, 0xEB, 0x70 }, 0, 6);
-            // Share Data Header
+            // Share Control Header (6 bytes)
             ms.Write(new byte[] {
-                0x16, 0x00, // totalLength = 22
+                0x16, 0x00, // totalLength = 22 (6 + 12 + 4)
                 0x17, 0x00, // TS_PDUTYPE_DATAPDU
-                0xEB, 0x03, // pduSource = 1003
-                0xEA, 0x03, 0x01, 0x00, // shareId
-                0x00, 0x01, // pad, streamId
-                0x06, 0x00, // uncompressedLength = 6
-                0x1F, // pduType2 = SYNCHRONIZE
-                0x00, // generalCompressedType
-                0x00, 0x00, // generalCompressedLength
-                0x01, 0x00, // messageType = 1
-                0xEA, 0x03  // targetUser = 1002
-            }, 0, 22);
-            return WrapTpktX224Data(ms.ToArray());
+                0xEB, 0x03  // pduSource = 1003
+            }, 0, 6);
+
+            // Share Data Header (12 bytes)
+            ms.Write(BitConverter.GetBytes(shareId), 0, 4); // shareId
+            ms.WriteByte(0x00); // pad1
+            ms.WriteByte(0x01); // streamId = STREAM_LOW
+            ms.Write(new byte[] { 0x04, 0x00 }, 0, 2); // uncompressedLength = 4
+            ms.WriteByte(0x1F); // pduType2 = TS_PDUTYPE2_SYNCHRONIZE
+            ms.WriteByte(0x00); // compressedType = 0
+            ms.Write(new byte[] { 0x00, 0x00 }, 0, 2); // compressedLength = 0
+
+            // Synchronize Payload (4 bytes)
+            ms.Write(new byte[] { 0x01, 0x00 }, 0, 2); // messageType = SYNCMSGTYPE_SYNC (1)
+            ms.Write(BitConverter.GetBytes(userId), 0, 2); // targetUser = 1002
+
+            return WrapSendDataIndication(ms.ToArray(), 1002, 1003);
         }
 
-        public static byte[] BuildControlPDU(ushort action, ushort grantId = 0, uint controlId = 0)
+        public static byte[] BuildControlPDU(ushort action, ushort grantId = 0, uint controlId = 0, uint shareId = 0x000103EA)
         {
             using var ms = new MemoryStream();
-            ms.Write(new byte[] { RdpProtocolConstants.MCS_SEND_DATA_INDICATION, 0x00, 0x01, 0x03, 0xEB, 0x70 }, 0, 6);
-            // Share Data Header
+            // Share Control Header (6 bytes)
             ms.Write(new byte[] {
-                0x1C, 0x00, // totalLength = 28
+                0x1A, 0x00, // totalLength = 26 (6 + 12 + 8)
                 0x17, 0x00, // TS_PDUTYPE_DATAPDU
-                0xEB, 0x03, // pduSource = 1003
-                0xEA, 0x03, 0x01, 0x00, // shareId
-                0x00, 0x01, // pad, streamId
-                0x0C, 0x00, // uncompressedLength = 12
-                0x14, // pduType2 = CONTROL
-                0x00, // generalCompressedType
-                0x00, 0x00, // generalCompressedLength
-                (byte)(action & 0xFF), (byte)((action >> 8) & 0xFF),
-                (byte)(grantId & 0xFF), (byte)((grantId >> 8) & 0xFF),
-                (byte)(controlId & 0xFF), (byte)((controlId >> 8) & 0xFF),
-                (byte)((controlId >> 16) & 0xFF), (byte)((controlId >> 24) & 0xFF)
-            }, 0, 28);
-            return WrapTpktX224Data(ms.ToArray());
+                0xEB, 0x03  // pduSource = 1003
+            }, 0, 6);
+
+            // Share Data Header (12 bytes)
+            ms.Write(BitConverter.GetBytes(shareId), 0, 4); // shareId
+            ms.WriteByte(0x00); // pad1
+            ms.WriteByte(0x01); // streamId = STREAM_LOW
+            ms.Write(new byte[] { 0x08, 0x00 }, 0, 2); // uncompressedLength = 8
+            ms.WriteByte(0x14); // pduType2 = TS_PDUTYPE2_CONTROL
+            ms.WriteByte(0x00); // compressedType = 0
+            ms.Write(new byte[] { 0x00, 0x00 }, 0, 2); // compressedLength = 0
+
+            // Control Payload (8 bytes)
+            ms.Write(BitConverter.GetBytes(action), 0, 2); // action
+            ms.Write(BitConverter.GetBytes(grantId), 0, 2); // grantId
+            ms.Write(BitConverter.GetBytes(controlId), 0, 4); // controlId
+
+            return WrapSendDataIndication(ms.ToArray(), 1002, 1003);
         }
 
-        public static byte[] BuildFontMapPDU()
+        public static byte[] BuildFontMapPDU(uint shareId = 0x000103EA)
         {
             using var ms = new MemoryStream();
-            ms.Write(new byte[] { RdpProtocolConstants.MCS_SEND_DATA_INDICATION, 0x00, 0x01, 0x03, 0xEB, 0x70 }, 0, 6);
+            // Share Control Header (6 bytes)
             ms.Write(new byte[] {
-                0x18, 0x00, // totalLength = 24
+                0x1A, 0x00, // totalLength = 26 (6 + 12 + 8)
                 0x17, 0x00, // TS_PDUTYPE_DATAPDU
-                0xEB, 0x03, // pduSource = 1003
-                0xEA, 0x03, 0x01, 0x00, // shareId
-                0x00, 0x01, // pad, streamId
-                0x08, 0x00, // uncompressedLength = 8
-                0x28, // pduType2 = FONTMAP
-                0x00, // generalCompressedType
-                0x00, 0x00, // generalCompressedLength
-                0x00, 0x00, // numberEntries = 0
-                0x00, 0x00, // totalNumEntries = 0
-                0x03, 0x00  // mapFlags = 3 (FIRST | LAST)
-            }, 0, 24);
-            return WrapTpktX224Data(ms.ToArray());
+                0xEB, 0x03  // pduSource = 1003
+            }, 0, 6);
+
+            // Share Data Header (12 bytes)
+            ms.Write(BitConverter.GetBytes(shareId), 0, 4); // shareId
+            ms.WriteByte(0x00); // pad1
+            ms.WriteByte(0x01); // streamId = STREAM_LOW
+            ms.Write(new byte[] { 0x08, 0x00 }, 0, 2); // uncompressedLength = 8
+            ms.WriteByte(0x28); // pduType2 = TS_PDUTYPE2_FONTMAP
+            ms.WriteByte(0x00); // compressedType = 0
+            ms.Write(new byte[] { 0x00, 0x00 }, 0, 2); // compressedLength = 0
+
+            // Font Map Payload (8 bytes)
+            ms.Write(new byte[] { 0x00, 0x00 }, 0, 2); // numberEntries = 0
+            ms.Write(new byte[] { 0x00, 0x00 }, 0, 2); // totalNumEntries = 0
+            ms.Write(new byte[] { 0x03, 0x00 }, 0, 2); // mapFlags = 3 (FIRST | LAST)
+            ms.Write(new byte[] { 0x04, 0x00 }, 0, 2); // entrySize = 4
+
+            return WrapSendDataIndication(ms.ToArray(), 1002, 1003);
         }
 
         private static void WriteBerLength(Stream stream, int length)

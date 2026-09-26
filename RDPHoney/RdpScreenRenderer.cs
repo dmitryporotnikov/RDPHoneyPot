@@ -264,34 +264,35 @@ namespace RDPHoney
                 // bitmapLength (2) = stripPixelBytes
                 // bitmapData = bgrData
 
-                int updateDataLength = 2 + 18 + stripPixelBytes;
-                // Fast-Path Header (1 byte: 0x00) + length (1 or 2 bytes) + updateHeader (1 byte: 0x01)
-                int totalLength = 1 + (updateDataLength + 1 >= 128 ? 2 : 1) + 1 + updateDataLength;
+                // Payload:
+                // updateType (2 bytes, LE: 0x0001 = UPDATE_TYPE_BITMAP)
+                // numberRectangles (2 bytes, LE: 0x0001)
+                // Rectangle Header (18 bytes)
+                // Bitmap Data (stripPixelBytes)
+                int updateDataLength = 2 + 2 + 18 + stripPixelBytes;
+
+                // Total Fast-Path PDU length:
+                // fpOutputHeader (1 byte: 0x00)
+                // length1 & length2 (2 bytes: 0x8000 | totalLength)
+                // updateHeader (1 byte: 0x01 = FASTPATH_UPDATETYPE_BITMAP)
+                // updateDataLength
+                int totalLength = 1 + 2 + 1 + updateDataLength;
 
                 using var ms = new MemoryStream(totalLength);
 
-                // Fast-Path Header
+                // Fast-Path Output Header (3 bytes)
                 ms.WriteByte(RdpProtocolConstants.FASTPATH_OUTPUT_ACTION_FASTPATH);
-
-                // Length
-                int payloadLength = totalLength;
-                if (payloadLength >= 128)
-                {
-                    ms.WriteByte((byte)((payloadLength >> 8) | 0x80));
-                    ms.WriteByte((byte)(payloadLength & 0xFF));
-                }
-                else
-                {
-                    ms.WriteByte((byte)payloadLength);
-                }
+                ms.WriteByte((byte)(0x80 | ((totalLength >> 8) & 0xFF)));
+                ms.WriteByte((byte)(totalLength & 0xFF));
 
                 // Update Header: FASTPATH_UPDATETYPE_BITMAP (0x01)
                 ms.WriteByte(RdpProtocolConstants.FASTPATH_UPDATETYPE_BITMAP);
 
                 // TS_UPDATE_BITMAP_DATA
+                WriteUInt16LE(ms, 1); // updateType = UPDATE_TYPE_BITMAP (1)
                 WriteUInt16LE(ms, 1); // numberRectangles = 1
 
-                // Rectangle
+                // Rectangle Header (18 bytes)
                 WriteUInt16LE(ms, 0); // destLeft
                 WriteUInt16LE(ms, (ushort)top); // destTop
                 WriteUInt16LE(ms, (ushort)(width - 1)); // destRight

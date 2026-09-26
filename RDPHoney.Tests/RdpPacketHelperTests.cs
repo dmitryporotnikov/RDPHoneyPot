@@ -33,6 +33,44 @@ namespace RDPHoney.Tests
         }
 
         [Fact]
+        public void BuildServerLicenseValidClientPDU_GeneratesValidMcsSendDataIndication()
+        {
+            byte[] packet = RdpPacketHelper.BuildServerLicenseValidClientPDU();
+
+            // Total: TPKT (4) + X.224 DT (3) + MCS SendDataIndication (8) + SecHeader (4) + LicMsg (16) = 35 bytes
+            Assert.Equal(35, packet.Length);
+            Assert.Equal(0x03, packet[0]); // TPKT Version
+            Assert.Equal(35, packet[3]); // Total length
+            Assert.Equal(0xF0, packet[5]); // X.224 Data
+            Assert.Equal(0x68, packet[7]); // MCS SendDataIndication
+            Assert.Equal(0x00, packet[8]); // Initiator offset hi
+            Assert.Equal(0x01, packet[9]); // Initiator offset lo (1002 - 1001 = 1)
+            Assert.Equal(0x03, packet[10]); // Channel 1003 hi
+            Assert.Equal(0xEB, packet[11]); // Channel 1003 lo
+            Assert.Equal(0x70, packet[12]); // dataPriority + segmentation
+            Assert.Equal(0x80, packet[13]); // PER length hi (20 | 0x8000)
+            Assert.Equal(0x14, packet[14]); // PER length lo (20 bytes)
+            Assert.Equal(0x80, packet[15]); // SEC_LICENSE_PKT
+        }
+
+        [Fact]
+        public void BuildDemandActivePDU_GeneratesValidMcsSendDataIndicationWithCaps()
+        {
+            byte[] packet = RdpPacketHelper.BuildDemandActivePDU(1024, 768);
+
+            Assert.True(packet.Length > 100);
+            Assert.Equal(0x03, packet[0]); // TPKT
+            Assert.Equal(0xF0, packet[5]); // X.224 DT
+            Assert.Equal(0x68, packet[7]); // MCS SendDataIndication
+            Assert.Equal(0x00, packet[8]); // Initiator
+            Assert.Equal(0x01, packet[9]);
+            Assert.Equal(0x03, packet[10]); // Channel 1003
+            Assert.Equal(0xEB, packet[11]);
+            Assert.Equal(0x70, packet[12]); // Priority
+            Assert.True((packet[13] & 0x80) != 0); // PER length bit set
+        }
+
+        [Fact]
         public void ScancodeToChar_MapsLettersAndDigits()
         {
             Assert.Equal('a', RdpPacketHelper.ScancodeToChar(0x1E, isShift: false));
@@ -45,8 +83,6 @@ namespace RDPHoney.Tests
         [Fact]
         public void ExtractCredentialsFromInfoPacket_ExtractsUsernameAndPassword()
         {
-            // Build mock TS_INFO_PACKET
-            // CodePage (2), flags (4), cbDomain (2), cbUserName (2), cbPassword (2), cbAltShell (2), cbWorkDir (2)
             string domain = "WORKGROUP";
             string user = "Administrator";
             string pass = "H0neyP0t!";

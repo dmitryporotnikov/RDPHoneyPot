@@ -186,8 +186,18 @@ namespace RDPHoney
                     sslStream.Write(demandActive, 0, demandActive.Length);
                     sslStream.Flush();
 
-                    // Read Confirm Active PDU & Client Synchronize
-                    _ = sslStream.Read(mcsBuffer, 0, mcsBuffer.Length);
+                    // Read Confirm Active PDU from client
+                    try
+                    {
+                        sslStream.ReadTimeout = 3000;
+                        _ = sslStream.Read(mcsBuffer, 0, mcsBuffer.Length);
+                        while (rawStream.DataAvailable)
+                        {
+                            _ = sslStream.Read(mcsBuffer, 0, mcsBuffer.Length);
+                        }
+                    }
+                    catch (IOException) { }
+                    sslStream.ReadTimeout = 30000;
 
                     // 8. Connection Finalization (Synchronize, Control Cooperate, Granted Control, Font Map)
                     byte[] syncPdu = RdpPacketHelper.BuildSynchronizePDU();
