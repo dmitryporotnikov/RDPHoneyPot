@@ -81,9 +81,9 @@ docker compose ps
 
 Expected output:
 ```text
-NAME                 IMAGE                     STATUS         PORTS
-rdphoney             rdphoneypot-rdphoney      Up (healthy)   0.0.0.0:3389->3389/tcp
-rdphoney-db-admin    coleifer/sqlite-web       Up             0.0.0.0:8080->8080/tcp
+NAME                 IMAGE                         STATUS         PORTS
+rdphoney             rdphoneypot-rdphoney          Up             0.0.0.0:3389->3389/tcp
+rdphoney-db-admin    ghcr.io/coleifer/sqlite-web   Up             0.0.0.0:8080->8080/tcp
 ```
 
 ### Step 5: Check Honeypot Logs

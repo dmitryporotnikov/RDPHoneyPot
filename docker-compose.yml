@@ -11,6 +11,7 @@ services:
     environment:
       - DATABASE_PATH=/app/data/RdpHoneypotLogs.db
       - HONEYPOT_PORT=3389
+      - STATIC_JPG_PATH=/app/assets/desktop.jpg
     volumes:
       # Host bind mount: exposes database directly on host machine (./data/RdpHoneypotLogs.db)
       - ./data:/app/data
@@ -19,13 +20,24 @@ services:
 
   # Database Web Administration UI (reachable from host machine at http://localhost:8080)
   db-admin:
-    image: coleifer/sqlite-web:latest
+    image: ghcr.io/coleifer/sqlite-web:latest
     container_name: rdphoney-db-admin
     restart: unless-stopped
     ports:
       - "${DB_ADMIN_PORT:-8080}:8080"
     volumes:
       - ./data:/data
-    command: ["/data/RdpHoneypotLogs.db", "-H", "0.0.0.0", "-p", "8080", "--read-only=false"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /data/RdpHoneypotLogs.db ]; then
+          python -c "import sqlite3; conn = sqlite3.connect('/data/RdpHoneypotLogs.db'); conn.close()"
+        fi
+        if command -v sqlite_web > /dev/null 2>&1; then
+          exec sqlite_web -H 0.0.0.0 -p 8080 /data/RdpHoneypotLogs.db --read-only=false
+        else
+          exec sqlite_wsgi -H 0.0.0.0 -p 8080 /data/RdpHoneypotLogs.db
+        fi
     depends_on:
       - rdphoney
