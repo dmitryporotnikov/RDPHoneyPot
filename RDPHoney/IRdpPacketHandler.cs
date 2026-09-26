@@ -36,12 +36,29 @@ namespace RDPHoney
             return "Unknown";
         }
 
+        public static bool ShouldDropClient(string clientIP)
+        {
+            var env = Environment.GetEnvironmentVariable("AUTO_BAN_RDP_CLIENTS");
+            if (string.Equals(env, "false", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // Do not auto-ban loopback testing addresses
+            if (IPAddress.TryParse(clientIP, out var ip) && IPAddress.IsLoopback(ip))
+            {
+                return false;
+            }
+
+            return DatabaseLogger.CheckIfRdpClientExists(clientIP);
+        }
+
         public void HandleClient(TcpClient client)
         {
             string clientIP = GetClientIpAddress(client);
-            if (DatabaseLogger.CheckIfRdpClientExists(clientIP))
+            if (ShouldDropClient(clientIP))
             {
-                Console.WriteLine($"Connection from {clientIP} dropped due to previous RDPClient activity.");
+                Console.WriteLine($"Connection from {clientIP} dropped due to previous RDPClient activity (auto-ban).");
                 client.Close();
                 return;
             }

@@ -21,15 +21,45 @@ namespace RDPHoney.Tests
         }
 
         [Fact]
-        public void BuildMcsConnectResponse_GeneratesValidBerPacket()
+        public void BuildMcsConnectResponse_GeneratesValidBerPacketWithGcc()
         {
             byte[] packet = RdpPacketHelper.BuildMcsConnectResponse();
 
-            Assert.True(packet.Length > 20);
+            Assert.True(packet.Length > 50);
             Assert.Equal(0x03, packet[0]); // TPKT Version
-            Assert.Equal(RdpProtocolConstants.X224_TPDU_DT, packet[5]); // Data TPDU
+            Assert.Equal(RdpProtocolConstants.X224_TPDU_DT, packet[5]); // Data TPDU (0xF0)
             Assert.Equal(0x7F, packet[7]); // Application 102
             Assert.Equal(0x66, packet[8]);
+
+            // Verify "McDn" H.221 server-to-client key is present
+            string packetStr = Encoding.ASCII.GetString(packet);
+            Assert.Contains("McDn", packetStr);
+        }
+
+        [Fact]
+        public void BuildMcsAttachUserConfirm_UsesCorrectPerIntegerOffset()
+        {
+            byte[] packet = RdpPacketHelper.BuildMcsAttachUserConfirm(1002);
+
+            Assert.Equal(11, packet.Length);
+            Assert.Equal(0x2E, packet[7]); // AttachUserConfirm
+            Assert.Equal(0x00, packet[8]); // rt-successful
+            Assert.Equal(0x00, packet[9]); // user offset hi (1002 - 1001 = 1)
+            Assert.Equal(0x01, packet[10]); // user offset lo
+        }
+
+        [Fact]
+        public void BuildMcsChannelJoinConfirm_UsesCorrectInitiatorAndChannel()
+        {
+            byte[] packet = RdpPacketHelper.BuildMcsChannelJoinConfirm(1002, 1003);
+
+            Assert.Equal(15, packet.Length);
+            Assert.Equal(0x3E, packet[7]); // ChannelJoinConfirm
+            Assert.Equal(0x00, packet[8]); // rt-successful
+            Assert.Equal(0x00, packet[9]); // initiator offset hi
+            Assert.Equal(0x01, packet[10]); // initiator offset lo (1002 - 1001 = 1)
+            Assert.Equal(0x03, packet[11]); // channel 1003 hi
+            Assert.Equal(0xEB, packet[12]); // channel 1003 lo
         }
 
         [Fact]
@@ -68,6 +98,23 @@ namespace RDPHoney.Tests
             Assert.Equal(0xEB, packet[11]);
             Assert.Equal(0x70, packet[12]); // Priority
             Assert.True((packet[13] & 0x80) != 0); // PER length bit set
+        }
+
+        [Fact]
+        public void ShouldDropClient_ExemptsLoopbackAndHonorsEnvVar()
+        {
+            Assert.False(RdpConnectionHandler.ShouldDropClient("127.0.0.1"));
+            Assert.False(RdpConnectionHandler.ShouldDropClient("::1"));
+
+            try
+            {
+                Environment.SetEnvironmentVariable("AUTO_BAN_RDP_CLIENTS", "false");
+                Assert.False(RdpConnectionHandler.ShouldDropClient("198.51.100.99"));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("AUTO_BAN_RDP_CLIENTS", null);
+            }
         }
 
         [Fact]

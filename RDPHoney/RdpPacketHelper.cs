@@ -105,33 +105,72 @@ namespace RDPHoney
 
         public static byte[] BuildMcsConnectResponse()
         {
-            // Standard GCC Conference Create Response
-            byte[] gccResponse = new byte[] {
-                0x00, 0x05, 0x00, 0x14, 0x7C, 0x00, 0x01, // Connect-GCC-PDU
-                // SC_CORE (Server Core Data, length 12)
-                0x0C, 0x01, 0x0C, 0x00, 0x04, 0x00, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00,
-                // SC_NET (Server Network Data, length 8)
-                0x0C, 0x03, 0x08, 0x00, 0xEB, 0x03, 0x00, 0x00,
-                // SC_SECURITY (Server Security Data, length 12)
-                0x0C, 0x02, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-            };
+            // 1. Server Data Blocks (userData)
+            using var serverDataMs = new MemoryStream();
 
+            // SC_CORE (type = 0x0C01, length = 16)
+            serverDataMs.Write(new byte[] {
+                0x01, 0x0C, // type = SC_CORE (0x0C01, LE)
+                0x10, 0x00, // length = 16
+                0x04, 0x00, 0x08, 0x00, // serverVersion = RDP 8.0/10.0 (0x00080004)
+                0x01, 0x00, 0x00, 0x00, // clientRequestedProtocols = PROTOCOL_SSL (0x00000001)
+                0x00, 0x00, 0x00, 0x00  // earlyCapabilityFlags = 0
+            }, 0, 16);
+
+            // SC_NET (type = 0x0C03, length = 8)
+            serverDataMs.Write(new byte[] {
+                0x03, 0x0C, // type = SC_NET (0x0C03, LE)
+                0x08, 0x00, // length = 8
+                0xEB, 0x03, // MCSChannelId = 1003 (0x03EB, LE)
+                0x00, 0x00  // channelCount = 0
+            }, 0, 8);
+
+            // SC_SECURITY (type = 0x0C02, length = 12)
+            serverDataMs.Write(new byte[] {
+                0x02, 0x0C, // type = SC_SECURITY (0x0C02, LE)
+                0x0C, 0x00, // length = 12
+                0x00, 0x00, 0x00, 0x00, // encryptionMethod = 0 (None, TLS handles encryption)
+                0x00, 0x00, 0x00, 0x00  // encryptionLevel = 0
+            }, 0, 12);
+
+            byte[] serverData = serverDataMs.ToArray(); // 36 bytes
+
+            // 2. ConnectGCCPDU (PER-encoded GCC ConferenceCreateResponse)
+            using var gccMs = new MemoryStream();
+            gccMs.WriteByte(0x00); // ConnectData choice: object (0)
+            // OID: 0.0.20.124.0.1 (t124_02_98_oid)
+            gccMs.Write(new byte[] { 0x05, 0x00, 0x14, 0x7C, 0x00, 0x01 }, 0, 6);
+            gccMs.WriteByte(0x2A); // connectPDU length (ignored by client according to MS-RDPBCGR)
+            gccMs.WriteByte(0x14); // ConnectGCCPDU choice: conferenceCreateResponse (0x14)
+            gccMs.Write(new byte[] { 0x76, 0x0A }, 0, 2); // nodeID: 0x79F3 (0x79F3 - 1001 = 30218 = 0x760A)
+            gccMs.Write(new byte[] { 0x01, 0x01 }, 0, 2); // tag: 1 (0x01, 0x01)
+            gccMs.WriteByte(0x00); // result: success (0)
+            gccMs.WriteByte(0x01); // number of UserData sets: 1
+            gccMs.WriteByte(0xC0); // UserData choice: value present + h221NonStandard (0xC0)
+            // h221NonStandard key: "McDn" (length = 4, min = 4 -> mlength = 0)
+            gccMs.WriteByte(0x00); // mlength = 0
+            gccMs.Write(Encoding.ASCII.GetBytes("McDn"), 0, 4); // "McDn"
+            // userData OCTET STRING (serverData)
+            if (serverData.Length < 128)
+            {
+                gccMs.WriteByte((byte)serverData.Length);
+            }
+            else
+            {
+                gccMs.WriteByte((byte)((serverData.Length >> 8) | 0x80));
+                gccMs.WriteByte((byte)(serverData.Length & 0xFF));
+            }
+            gccMs.Write(serverData, 0, serverData.Length);
+
+            byte[] gccResponse = gccMs.ToArray();
+
+            // 3. MCS Connect-Response [APPLICATION 102]
             using var ms = new MemoryStream();
-            // BER Choice [APPLICATION 102]
             ms.WriteByte(0x7F);
             ms.WriteByte(0x66);
 
-            // Calculate length of inner BER
-            int innerLength = 3 + 3 + 26 + (2 + gccResponse.Length);
-            WriteBerLength(ms, innerLength);
-
-            // Result rt-successful (0)
-            ms.Write(new byte[] { 0x0A, 0x01, 0x00 }, 0, 3);
-            // calledConnectId
-            ms.Write(new byte[] { 0x02, 0x01, 0x00 }, 0, 3);
-
             // domainParameters (26 bytes)
-            ms.Write(new byte[] {
+            byte[] domainParams = new byte[] {
                 0x30, 0x18,
                 0x02, 0x01, 0x22, // maxChannelIds: 34
                 0x02, 0x01, 0x02, // maxUserIds: 2
@@ -141,7 +180,18 @@ namespace RDPHoney
                 0x02, 0x01, 0x01, // maxHeight: 1
                 0x02, 0x03, 0x00, 0xFF, 0xFF, // maxMCSPDUsize: 65535
                 0x02, 0x01, 0x02  // protocolVersion: 2
-            }, 0, 26);
+            };
+
+            int userDataHeaderLen = gccResponse.Length < 128 ? 2 : (gccResponse.Length <= 0xFF ? 3 : 4);
+            int innerLength = 3 + 3 + domainParams.Length + (userDataHeaderLen + gccResponse.Length);
+            WriteBerLength(ms, innerLength);
+
+            // Result rt-successful (0)
+            ms.Write(new byte[] { 0x0A, 0x01, 0x00 }, 0, 3);
+            // calledConnectId
+            ms.Write(new byte[] { 0x02, 0x01, 0x00 }, 0, 3);
+            // domainParameters
+            ms.Write(domainParams, 0, domainParams.Length);
 
             // UserData (OCTET STRING)
             ms.WriteByte(0x04);
@@ -153,22 +203,28 @@ namespace RDPHoney
 
         public static byte[] BuildMcsAttachUserConfirm(ushort userId = 1002)
         {
+            // In PER integer16 with min=MCS_BASE_CHANNEL_ID (1001):
+            // value encoded is (userId - 1001)
+            ushort userOffset = (ushort)(userId - 1001);
             byte[] mcsPayload = new byte[] {
                 RdpProtocolConstants.MCS_ATTACH_USER_CONFIRM, // 0x2E
                 0x00, // result = rt-successful
-                (byte)((userId >> 8) & 0xFF),
-                (byte)(userId & 0xFF)
+                (byte)((userOffset >> 8) & 0xFF),
+                (byte)(userOffset & 0xFF)
             };
             return WrapTpktX224Data(mcsPayload);
         }
 
         public static byte[] BuildMcsChannelJoinConfirm(ushort initiator, ushort channelId)
         {
+            // initiator is encoded with min=1001 -> (initiator - 1001)
+            // requested & channelId are encoded with min=0 -> channelId
+            ushort userOffset = (ushort)(initiator - 1001);
             byte[] mcsPayload = new byte[] {
                 RdpProtocolConstants.MCS_CHANNEL_JOIN_CONFIRM, // 0x3E
                 0x00, // result = rt-successful
-                (byte)((initiator >> 8) & 0xFF),
-                (byte)(initiator & 0xFF),
+                (byte)((userOffset >> 8) & 0xFF),
+                (byte)(userOffset & 0xFF),
                 (byte)((channelId >> 8) & 0xFF),
                 (byte)(channelId & 0xFF),
                 (byte)((channelId >> 8) & 0xFF),
