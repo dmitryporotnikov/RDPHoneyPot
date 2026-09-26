@@ -1,0 +1,31 @@
+services:
+  # RDP Honeypot Service (.NET 10 LTS)
+  rdphoney:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rdphoney
+    restart: unless-stopped
+    ports:
+      - "${HONEYPOT_PORT:-3389}:3389"
+    environment:
+      - DATABASE_PATH=/app/data/RdpHoneypotLogs.db
+      - HONEYPOT_PORT=3389
+    volumes:
+      # Host bind mount: exposes database directly on host machine (./data/RdpHoneypotLogs.db)
+      - ./data:/app/data
+      # Host bind mount: allows admin to customize static JPG without rebuilding container
+      - ./assets:/app/assets
+
+  # Database Web Administration UI (reachable from host machine at http://localhost:8080)
+  db-admin:
+    image: coleifer/sqlite-web:latest
+    container_name: rdphoney-db-admin
+    restart: unless-stopped
+    ports:
+      - "${DB_ADMIN_PORT:-8080}:8080"
+    volumes:
+      - ./data:/data
+    command: ["/data/RdpHoneypotLogs.db", "-H", "0.0.0.0", "-p", "8080", "--read-only=false"]
+    depends_on:
+      - rdphoney

@@ -1,54 +1,112 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net.Sockets;
 using System.Net;
-using System.Text;
-using System.Threading.Tasks;
-using RDPHoney;
+using System.Net.Sockets;
+using System.Threading;
 
 namespace RDPHoney
 {
+    // Purpose: Implements an enhanced RDP server honeypot to simulate an RDP service, detect, and log unauthorized RDP connection attempts.
+    // Properties: Port(int), IsRunning(bool)
+    // Methods: EnhancedRDPServerHoneypot(int? port = null), Start(), Stop()
+    //----
+    // Port(int) - The port number (default 3389, configurable via HONEYPOT_PORT/RDP_PORT environment variable) on which the server listens.
+    // EnhancedRDPServerHoneypot() - Constructor that initializes the TcpListener on IPAddress.Any.
+    // Start() - Starts the TcpListener to accept incoming RDP connection requests and creates a background thread for each connection.
+    // Stop() - Gracefully stops the listener and cancels accepting new connections.
+    //
+    // Dmitry Porotnikov
+
     public class EnhancedRDPServerHoneypot
     {
-        // Purpose: Implements an enhanced RDP server honeypot to simulate an RDP service, detect, and log unauthorized RDP connection attempts.
-        // Properties: listener(TcpListener), Port(int)
-        // Methods: EnhancedRDPServerHoneypot(), Start()
-        //----
-        // listener(TcpListener) - A TcpListener instance used to listen for incoming TCP connection requests on a specified port.
-        // Port(int) - The port number (default 3389) on which the server listens for incoming RDP connection requests.
-        // EnhancedRDPServerHoneypot() - Constructor that initializes the TcpListener with IPAddress.Any, allowing it to accept connection requests on any network interface.
-        // Start() - Starts the TcpListener to accept incoming RDP connection requests and creates a new thread for each connection to handle the RDP handshake and subsequent interaction.
-        //
-        // Dmitry Porotnikkov
+        private readonly TcpListener _listener;
+        private readonly int _port;
+        private readonly CancellationTokenSource _cts = new();
+        private bool _isRunning;
 
-        private TcpListener listener;
-        private const int Port = 3389;
+        public int Port => _port;
+        public bool IsRunning => _isRunning;
 
-        public EnhancedRDPServerHoneypot()
+        public EnhancedRDPServerHoneypot(int? port = null)
         {
-            listener = new TcpListener(IPAddress.Any, Port);
+            _port = port ?? ResolvePort();
+            _listener = new TcpListener(IPAddress.Any, _port);
+        }
+
+        public static int ResolvePort()
+        {
+            var envPort = Environment.GetEnvironmentVariable("HONEYPOT_PORT")
+                          ?? Environment.GetEnvironmentVariable("RDP_PORT");
+
+            if (!string.IsNullOrWhiteSpace(envPort) && int.TryParse(envPort, out int parsedPort) && parsedPort > 0 && parsedPort <= 65535)
+            {
+                return parsedPort;
+            }
+
+            return 3389;
         }
 
         public void Start()
         {
-            listener.Start();
-            Console.WriteLine($"Listening for RDP connections on port {Port}...");
-
-            while (true)
+            try
             {
-                try
-                {
-                    var client = listener.AcceptTcpClient();
-                    Console.WriteLine("Client connected. Starting RDP handshake...");
+                _listener.Start();
+                _isRunning = true;
+                Console.WriteLine($"Listening for RDP connections on port {_port}...");
 
-                    var clientThread = new Thread(() => new RdpConnectionHandler().HandleClient(client));
-                    clientThread.Start();
-                }
-                catch (Exception e)
+                while (!_cts.IsCancellationRequested)
                 {
-                    Console.WriteLine($"Error accepting client: {e.Message}");
+                    try
+                    {
+                        var client = _listener.AcceptTcpClient();
+                        Console.WriteLine("Client connected. Starting RDP handshake...");
+
+                        var clientThread = new Thread(() => new RdpConnectionHandler().HandleClient(client))
+                        {
+                            IsBackground = true
+                        };
+                        clientThread.Start();
+                    }
+                    catch (SocketException) when (_cts.IsCancellationRequested)
+                    {
+                        // Expected when listener is stopped
+                        break;
+                    }
+                    catch (ObjectDisposedException) when (_cts.IsCancellationRequested)
+                    {
+                        // Expected when listener is disposed
+                        break;
+                    }
+                    catch (Exception e)
+                    {
+                        if (!_cts.IsCancellationRequested)
+                        {
+                            Console.WriteLine($"Error accepting client: {e.Message}");
+                        }
+                    }
                 }
+            }
+            finally
+            {
+                _isRunning = false;
+                Console.WriteLine("RDP Server stopped.");
+            }
+        }
+
+        public void Stop()
+        {
+            if (_cts.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _cts.Cancel();
+            try
+            {
+                _listener.Stop();
+            }
+            catch
+            {
+                // Ignore errors during stop
             }
         }
     }

@@ -1,0 +1,13 @@
+**/.git
+**/.github
+**/.vs
+**/.vscode
+**/bin
+**/obj
+data/*.db*
+*.db
+*.db-shm
+*.db-wal
+RDPHoney.Tests/
+*.md
+screenshot.png

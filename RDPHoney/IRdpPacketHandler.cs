@@ -1,31 +1,24 @@
 ﻿using System;
-using System.Data.SQLite;
 using System.IO;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Text;
+using System.Threading;
 
 namespace RDPHoney
 {
-    // Purpose: Implements handling of TCP clients connecting to an RDP honeypot server, simulating RDP handshake and logging activities.
-    // Interface: IRdpPacketHandler
-    // Methods: HandleClient(TcpClient client), ReadX224ConnectionRequest(NetworkStream stream), SendX224ConnectionConfirm(NetworkStream stream, TcpClient client), ReadMCSConnectInitial(NetworkStream stream, TcpClient client), SendMCSConnectResponse(NetworkStream stream, TcpClient client)
-    //----
-    // IRdpPacketHandler
-    // - HandleClient(TcpClient client): Entrypoint for handling an incoming RDP connection attempt.
-    //
-    // RdpConnectionHandler : IRdpPacketHandler
-    // - HandleClient(TcpClient client): Handles the incoming TCP client connection, performs initial checks for previous activity from the client IP, and attempts to simulate an RDP handshake process.
-    // - ReadX224ConnectionRequest(NetworkStream stream): Reads the X.224 Connection Request packet from the client, validating the start of the RDP handshake.
-    // - SendX224ConnectionConfirm(NetworkStream stream, TcpClient client): Sends a mock X.224 Connection Confirm packet to the client, simulating the next step of the RDP handshake.
-    // - ReadMCSConnectInitial(NetworkStream stream, TcpClient client): Reads the MCS Connect Initial packet from the client, further simulating the RDP handshake process.
-    // - SendMCSConnectResponse(NetworkStream stream, TcpClient client): Sends a simplified MCS Connect Response packet, completing the simulation of the RDP handshake for non-compliant or scanner-type clients.
-    //
-    // Details:
-    // The RdpConnectionHandler class implements the IRdpPacketHandler interface, defining a structured approach to handle RDP connection attempts. The primary method, HandleClient, orchestrates the simulation of an RDP handshake process, starting from the initial connection attempt, through various stages of the RDP protocol, and concludes by logging the attempt and optionally sending responses that might trigger certain behaviors in scanning software or malicious actors. The class is designed to work in conjunction with the DatabaseLogger class to log connection attempts and determine if the source IP has previously engaged in RDP-related activities. This mechanism allows for dynamic response strategies based on past interactions, enhancing the honeypot's capability to mimic real-world RDP server behaviors and potentially identifying malicious entities.
+    // Purpose: Implements full RDP protocol simulation:
+    // - Distinguishes Port Scanners vs RDP Clients
+    // - Establishes TLS handshake with self-signed certificate
+    // - Exchanges MCS, Licensing, Capabilities, and Connection Finalization
+    // - Captures credentials from Client Info PDU (brute-force tools) OR interactive login prompt
+    // - Logs captured credentials to SQLite
+    // - Renders static JPG to user's RDP display
+    // - Holds for 3 to 6 seconds at random, then disconnects
     //
     // Dmitry Porotnikov
-
 
     public interface IRdpPacketHandler
     {
@@ -34,183 +27,400 @@ namespace RDPHoney
 
     public class RdpConnectionHandler : IRdpPacketHandler
     {
+        public static string GetClientIpAddress(TcpClient client)
+        {
+            if (client.Client?.RemoteEndPoint is IPEndPoint ipEndPoint)
+            {
+                return ipEndPoint.Address.ToString();
+            }
+            return "Unknown";
+        }
+
         public void HandleClient(TcpClient client)
         {
-            string clientIP = ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString();
+            string clientIP = GetClientIpAddress(client);
             if (DatabaseLogger.CheckIfRdpClientExists(clientIP))
             {
-                // If exists, silently drop the connection by not responding and closing the stream.
                 Console.WriteLine($"Connection from {clientIP} dropped due to previous RDPClient activity.");
                 client.Close();
-                return; // Exit the method, effectively dropping the connection silently.
+                return;
             }
 
-            using (var clientStream = client.GetStream())
+            client.ReceiveTimeout = 30000;
+            client.SendTimeout = 30000;
+
+            using (var rawStream = client.GetStream())
             {
                 try
                 {
-                    ReadX224ConnectionRequest(clientStream);
-                    SendX224ConnectionConfirm(clientStream, client);
-                    ReadMCSConnectInitial(clientStream, client);
-                    SendMCSConnectResponse(clientStream, client);
+                    // 1. Read initial X.224 Connection Request
+                    byte[] buffer = new byte[4096];
+                    int bytesRead = rawStream.Read(buffer, 0, buffer.Length);
+                    if (bytesRead < 4)
+                    {
+                        Console.WriteLine($"Connection closed early by {clientIP}.");
+                        return;
+                    }
+
+                    // Check if packet is TPKT + X.224 CR
+                    bool isX224Cr = buffer[0] == RdpProtocolConstants.TPKT_VERSION &&
+                                    bytesRead >= 7 &&
+                                    (buffer[5] == RdpProtocolConstants.X224_TPDU_CR || buffer[5] == 0xE0);
+
+                    // Check for RDP Negotiation Request (0x01)
+                    bool hasRdpNegReq = false;
+                    for (int i = 4; i < bytesRead - 7; i++)
+                    {
+                        if (buffer[i] == RdpProtocolConstants.RDP_NEG_REQ && buffer[i + 2] == 0x08)
+                        {
+                            hasRdpNegReq = true;
+                            break;
+                        }
+                    }
+
+                    if (!isX224Cr || !hasRdpNegReq)
+                    {
+                        // Client is most likely an automated port scanner
+                        SendSimplifiedPortScannerResponse(rawStream, clientIP);
+                        return;
+                    }
+
+                    Console.WriteLine($"RDP Connection Request received from {clientIP}. Initiating TLS negotiation...");
+
+                    // 2. Respond with X.224 Connection Confirm specifying PROTOCOL_SSL (0x01)
+                    byte[] ccPacket = RdpPacketHelper.BuildX224ConnectionConfirm(0x1234, RdpProtocolConstants.PROTOCOL_SSL);
+                    rawStream.Write(ccPacket, 0, ccPacket.Length);
+                    rawStream.Flush();
+
+                    // 3. Establish TLS Session
+                    using var sslStream = new SslStream(rawStream, false);
+                    try
+                    {
+                        sslStream.AuthenticateAsServer(
+                            TlsCertificateManager.ServerCertificate,
+                            clientCertificateRequired: false,
+                            enabledSslProtocols: SslProtocols.Tls12 | SslProtocols.Tls13,
+                            checkCertificateRevocation: false);
+                    }
+                    catch (Exception tlsEx)
+                    {
+                        Console.WriteLine($"TLS Handshake failed with {clientIP}: {tlsEx.Message}. Logging as RDPClient.");
+                        DatabaseLogger.LogConnection(clientIP, "RDPClient");
+                        return;
+                    }
+
+                    Console.WriteLine($"TLS Handshake established with {clientIP}. Proceeding to RDP session negotiation...");
+
+                    // 4. MCS Connect Initial
+                    int width = 1024;
+                    int height = 768;
+                    byte[] mcsBuffer = new byte[8192];
+                    int mcsBytes = sslStream.Read(mcsBuffer, 0, mcsBuffer.Length);
+
+                    if (mcsBytes > 0)
+                    {
+                        ExtractClientResolution(mcsBuffer, 0, mcsBytes, ref width, ref height);
+                        Console.WriteLine($"Client desktop resolution: {width}x{height}");
+                    }
+
+                    // Send MCS Connect Response
+                    byte[] mcsResponse = RdpPacketHelper.BuildMcsConnectResponse();
+                    sslStream.Write(mcsResponse, 0, mcsResponse.Length);
+                    sslStream.Flush();
+
+                    // 5. MCS AttachUserRequest & ChannelJoinRequests
+                    bool inChannelJoin = true;
+                    ushort userChannel = RdpProtocolConstants.MCS_USERCHANNEL_BASE;
+                    string capturedUsername = "";
+                    string capturedPassword = "";
+
+                    while (inChannelJoin)
+                    {
+                        int len = sslStream.Read(mcsBuffer, 0, mcsBuffer.Length);
+                        if (len <= 0) break;
+
+                        // Check PDU type
+                        int pduOffset = FindMcsPayloadOffset(mcsBuffer, len);
+                        byte pduType = pduOffset >= 0 ? mcsBuffer[pduOffset] : (byte)0;
+
+                        if (pduType == RdpProtocolConstants.MCS_ATTACH_USER_REQUEST || (len >= 8 && mcsBuffer[7] == 0x28))
+                        {
+                            byte[] attachConfirm = RdpPacketHelper.BuildMcsAttachUserConfirm(userChannel);
+                            sslStream.Write(attachConfirm, 0, attachConfirm.Length);
+                            sslStream.Flush();
+                        }
+                        else if (pduType == RdpProtocolConstants.MCS_CHANNEL_JOIN_REQUEST || (len >= 8 && mcsBuffer[7] == 0x38))
+                        {
+                            // Extract requested channel ID
+                            ushort chanId = 1003;
+                            if (pduOffset + 4 < len)
+                            {
+                                chanId = (ushort)((mcsBuffer[pduOffset + 3] << 8) | mcsBuffer[pduOffset + 4]);
+                            }
+                            byte[] joinConfirm = RdpPacketHelper.BuildMcsChannelJoinConfirm(userChannel, chanId);
+                            sslStream.Write(joinConfirm, 0, joinConfirm.Length);
+                            sslStream.Flush();
+                        }
+                        else
+                        {
+                            // Check for Client Info PDU (TS_INFO_PACKET)
+                            var creds = RdpPacketHelper.ExtractCredentialsFromInfoPacket(mcsBuffer, 0, len);
+                            if (!string.IsNullOrEmpty(creds.username))
+                            {
+                                capturedUsername = creds.username;
+                                capturedPassword = creds.password;
+                                Console.WriteLine($"Captured credentials in Client Info PDU: User='{capturedUsername}', Domain='{creds.domain}'");
+                            }
+
+                            inChannelJoin = false;
+                        }
+                    }
+
+                    // 6. Licensing Exchange
+                    byte[] licenseValid = RdpPacketHelper.BuildServerLicenseValidClientPDU();
+                    sslStream.Write(licenseValid, 0, licenseValid.Length);
+                    sslStream.Flush();
+
+                    // 7. Capabilities Exchange (Demand Active PDU)
+                    byte[] demandActive = RdpPacketHelper.BuildDemandActivePDU(width, height);
+                    sslStream.Write(demandActive, 0, demandActive.Length);
+                    sslStream.Flush();
+
+                    // Read Confirm Active PDU & Client Synchronize
+                    _ = sslStream.Read(mcsBuffer, 0, mcsBuffer.Length);
+
+                    // 8. Connection Finalization (Synchronize, Control Cooperate, Granted Control, Font Map)
+                    byte[] syncPdu = RdpPacketHelper.BuildSynchronizePDU();
+                    sslStream.Write(syncPdu, 0, syncPdu.Length);
+
+                    byte[] coopPdu = RdpPacketHelper.BuildControlPDU(4); // CTRLACTION_COOPERATE
+                    sslStream.Write(coopPdu, 0, coopPdu.Length);
+
+                    byte[] grantPdu = RdpPacketHelper.BuildControlPDU(2, userChannel, RdpProtocolConstants.MCS_IO_CHANNEL); // CTRLACTION_GRANTED_CONTROL
+                    sslStream.Write(grantPdu, 0, grantPdu.Length);
+
+                    byte[] fontMapPdu = RdpPacketHelper.BuildFontMapPDU();
+                    sslStream.Write(fontMapPdu, 0, fontMapPdu.Length);
+                    sslStream.Flush();
+
+                    Console.WriteLine($"RDP session established with {clientIP}.");
+
+                    // 9. Credential Handling & Screen Rendering
+                    if (!string.IsNullOrEmpty(capturedUsername) || !string.IsNullOrEmpty(capturedPassword))
+                    {
+                        // Case A: Credentials provided via Client Info PDU (e.g. brute force tool or saved credentials)
+                        LogAndDisplayStaticJpg(sslStream, clientIP, capturedUsername, capturedPassword, width, height);
+                    }
+                    else
+                    {
+                        // Case B: Interactive user -> Present login prompt, accept input, log, and render static JPG
+                        HandleInteractiveLoginAndRender(sslStream, clientIP, width, height);
+                    }
                 }
-                catch (Exception e)
+                catch (IOException ex)
                 {
-                    Console.WriteLine($"Error handling RDP client: {e.Message}");
+                    Console.WriteLine($"Network error with {clientIP}: {ex.Message}");
+                    DatabaseLogger.LogConnection(clientIP, "RDPClient");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error handling client {clientIP}: {ex.Message}");
+                }
+                finally
+                {
+                    try { client.Close(); } catch { }
                 }
             }
         }
 
-        private void ReadX224ConnectionRequest(NetworkStream stream)
+        private static void SendSimplifiedPortScannerResponse(NetworkStream stream, string clientIp)
         {
-            byte[] buffer = new byte[1024];
-            int bytesRead = 0;
-
-            try
-            {
-                bytesRead = stream.Read(buffer, 0, buffer.Length);
-                if (bytesRead > 0)
-                {
-                    Console.WriteLine("Received X.224 Connection Request");
-                }
-                else
-                {
-                    throw new Exception("No data received in connection request.");
-                }
-            }
-            catch (IOException e)
-            {
-                Console.WriteLine($"Network error reading X.224 request: {e.Message}");
-                throw;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"Error reading X.224 request: {e.Message}");
-                throw;
-            }
-        }
-
-       private void SendX224ConnectionConfirm(NetworkStream stream, TcpClient client)
-        {
-            // Construct the TPKT Header: Version 3, Reserved 0, Length
-            byte[] tpktHeader = new byte[] { 0x03, 0x00, 0x00, 0x00 };
-
-            // X.224 Connection Confirm (CC) TPDU
-            byte[] x224Ccf = new byte[] {
-        0x06, // Length Indicator: Includes x224Ccf and following bytes
-        (byte)0xD0, // CR - Connect Confirm
-        0, 0, // Destination Reference (0 = not used)
-        0x12, 0x34, // Source Reference (should be echoed from Connection Request)
-        0, // Class and Options (Class 0, no options)
-        };
-
-            // Assuming the security protocol negotiation is successful and opting for standard RDP security
-            byte[] rdpNegData = new byte[] {
-        0x02, // RDP Negotiation Response type
-        0x08, // Flags: PROTOCOL_SSL supported
-        0x00, 0x08, // Length (8 bytes including this header)
-        0x01, 0x00, 0x00, 0x00 // Selected Protocol: PROTOCOL_SSL
-        };
-
-            // Calculate the total length
-            int totalLength = tpktHeader.Length + x224Ccf.Length + rdpNegData.Length - 4; // Exclude the size of tpktHeader itself
-            tpktHeader[2] = (byte)((totalLength >> 8) & 0xFF); // High byte of length
-            tpktHeader[3] = (byte)(totalLength & 0xFF); // Low byte of length
-
-            // Combine all parts into one packet
-            byte[] packet = new byte[totalLength + 4]; // Include the size of tpktHeader
-            Buffer.BlockCopy(tpktHeader, 0, packet, 0, tpktHeader.Length);
-            Buffer.BlockCopy(x224Ccf, 0, packet, tpktHeader.Length, x224Ccf.Length);
-            Buffer.BlockCopy(rdpNegData, 0, packet, tpktHeader.Length + x224Ccf.Length, rdpNegData.Length);
-
-            try
-    {
-        stream.Write(packet, 0, packet.Length);
-        stream.Flush();
-        Console.WriteLine("Sent X.224 Connection Confirm with RDP Negotiation Response.");
-    }
-    catch (Exception e)
-    {
-        Console.WriteLine($"Error sending X.224 Connection Confirm: {e.Message}");
-    }
-        }
-
-
-        private void ReadMCSConnectInitial(NetworkStream stream, TcpClient client)
-        {
-            byte[] buffer = new byte[4096];
-            int bytesReadTotal = 0;
-
-            try
-            {
-                bytesReadTotal = stream.Read(buffer, 0, buffer.Length);
-                if (bytesReadTotal > 0)
-                {
-                    Console.WriteLine("Received MCS Connect Initial packet");
-                }
-                else
-                {
-                    throw new Exception("No data received in MCS Connect Initial.");
-                }
-            }
-            catch (IOException e)
-            {
-                Console.WriteLine($"Network error reading MCS Connect Initial: {e.Message}. Peer is most likely RDP client and reset connection as we just sent wrong SendX224ConnectionConfirm");
-                DatabaseLogger.LogConnection(((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString(), "RDPClient");
-
-                throw;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"Error reading MCS Connect Initial: {e.Message}");
-                throw;
-            }
-        }
-
-        private void SendMCSConnectResponse(NetworkStream stream, TcpClient client)
-        {
-            //not protocol complient, but scaner should eat that
-            byte[] tpktHeader = new byte[] { 0x03, 0x00 };
-            byte[] lengthPlaceholder = new byte[] { 0x01, 0x00 }; 
-
-            byte[] x224Header = new byte[] { 0x02, (byte)0xF0, (byte)0x80 }; // X.224 Data TPDU Header
-
-            byte[] mcsConnectResponse = Encoding.ASCII.GetBytes("MCS Connect Response");
-
-            // Combine parts to form the complete packet
-            byte[] packet = new byte[tpktHeader.Length + lengthPlaceholder.Length + x224Header.Length + mcsConnectResponse.Length];
-
-            // Copy parts into the packet
-            int offset = 0;
-            Buffer.BlockCopy(tpktHeader, 0, packet, offset, tpktHeader.Length);
-            offset += tpktHeader.Length;
-            Buffer.BlockCopy(lengthPlaceholder, 0, packet, offset, lengthPlaceholder.Length);
-            offset += lengthPlaceholder.Length;
-            Buffer.BlockCopy(x224Header, 0, packet, offset, x224Header.Length);
-            offset += x224Header.Length;
-            Buffer.BlockCopy(mcsConnectResponse, 0, packet, offset, mcsConnectResponse.Length);
-
-            // Calculate and set the actual packet length (TPKT total length)
-            int packetLength = packet.Length;
-            packet[2] = (byte)((packetLength >> 8) & 0xFF); // Length high byte
-            packet[3] = (byte)(packetLength & 0xFF); // Length low byte
+            byte[] response = Encoding.ASCII.GetBytes("MCS Connect Response");
+            byte[] packet = RdpPacketHelper.WrapTpktX224Data(response);
 
             try
             {
                 stream.Write(packet, 0, packet.Length);
                 stream.Flush();
-                Console.WriteLine("Sent simplified MCS Connect Response. Peer is most likely a port scanner");
-                DatabaseLogger.LogConnection(((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString(), "PortScanner");
-                stream.Close();
             }
-            catch (Exception e)
+            catch { }
+
+            Console.WriteLine($"Sent simplified MCS response. Peer {clientIp} classified as PortScanner.");
+            DatabaseLogger.LogConnection(clientIp, "PortScanner");
+        }
+
+        private static void LogAndDisplayStaticJpg(SslStream sslStream, string clientIp, string username, string password, int width, int height)
+        {
+            Console.WriteLine($"[Credentials Accepted & Logged] IP: {clientIp} | User: '{username}' | Password: '{password}'");
+            DatabaseLogger.LogConnection(clientIp, "RDPClient", username, password);
+
+            // Render static JPG
+            Console.WriteLine($"Rendering static JPG to {clientIp}...");
+            byte[] staticJpgRgb = RdpScreenRenderer.LoadStaticJpgRgb(width, height);
+            RdpScreenRenderer.SendBitmapUpdate(sslStream, staticJpgRgb, width, height);
+
+            // Hold session for 3 to 6 seconds at random
+            int delayMs = Random.Shared.Next(3000, 6001);
+            Console.WriteLine($"Session active. Disconnecting {clientIp} in {delayMs / 1000.0:F1} seconds...");
+            Thread.Sleep(delayMs);
+            Console.WriteLine($"Disconnecting {clientIp}.");
+        }
+
+        private static void HandleInteractiveLoginAndRender(SslStream sslStream, string clientIp, int width, int height)
+        {
+            string username = "";
+            string password = "";
+            bool isPasswordActive = false;
+            bool isShift = false;
+
+            Console.WriteLine($"Presenting graphical login prompt to {clientIp}...");
+
+            // Render initial login screen
+            byte[] loginScreenRgb = RdpScreenRenderer.GenerateLoginScreenRgb(width, height, username, password, isPasswordActive);
+            RdpScreenRenderer.SendBitmapUpdate(sslStream, loginScreenRgb, width, height);
+
+            byte[] inputBuffer = new byte[2048];
+            DateTime timeout = DateTime.UtcNow.AddSeconds(60);
+
+            while (DateTime.UtcNow < timeout)
             {
-                Console.WriteLine($"Error sending MCS Connect Response: {e.Message}");
-                stream.Close();
+                if (!sslStream.CanRead) break;
+
+                int bytesRead = sslStream.Read(inputBuffer, 0, inputBuffer.Length);
+                if (bytesRead <= 0) break;
+
+                bool stateChanged = false;
+                bool submitted = false;
+
+                // Parse input events
+                for (int i = 0; i < bytesRead; i++)
+                {
+                    // Check for Fast-Path Input event (0x00 header or 0x03)
+                    byte header = inputBuffer[i];
+                    if ((header & 0x03) == RdpProtocolConstants.FASTPATH_OUTPUT_ACTION_FASTPATH && i + 3 < bytesRead)
+                    {
+                        byte eventHeader = inputBuffer[i + 2];
+                        byte eventCode = (byte)(eventHeader & 0x1F);
+                        byte eventFlags = (byte)((eventHeader >> 5) & 0x07);
+                        bool isRelease = (eventFlags & RdpProtocolConstants.FASTPATH_INPUT_KBDFLAGS_RELEASE) != 0;
+
+                        if (eventCode == RdpProtocolConstants.FASTPATH_INPUT_EVENT_SCANCODE && i + 3 < bytesRead)
+                        {
+                            byte scancode = inputBuffer[i + 3];
+
+                            // Shift key
+                            if (scancode == 0x2A || scancode == 0x36)
+                            {
+                                isShift = !isRelease;
+                            }
+                            else if (!isRelease)
+                            {
+                                if (scancode == 0x1C) // Enter
+                                {
+                                    if (!isPasswordActive && !string.IsNullOrEmpty(username))
+                                    {
+                                        isPasswordActive = true;
+                                        stateChanged = true;
+                                    }
+                                    else
+                                    {
+                                        submitted = true;
+                                        break;
+                                    }
+                                }
+                                else if (scancode == 0x0F) // Tab
+                                {
+                                    isPasswordActive = !isPasswordActive;
+                                    stateChanged = true;
+                                }
+                                else if (scancode == 0x0E) // Backspace
+                                {
+                                    if (!isPasswordActive && username.Length > 0)
+                                    {
+                                        username = username[..^1];
+                                        stateChanged = true;
+                                    }
+                                    else if (isPasswordActive && password.Length > 0)
+                                    {
+                                        password = password[..^1];
+                                        stateChanged = true;
+                                    }
+                                }
+                                else
+                                {
+                                    char c = RdpPacketHelper.ScancodeToChar(scancode, isShift);
+                                    if (c != '\0')
+                                    {
+                                        if (!isPasswordActive && username.Length < 32)
+                                        {
+                                            username += c;
+                                            stateChanged = true;
+                                        }
+                                        else if (isPasswordActive && password.Length < 32)
+                                        {
+                                            password += c;
+                                            stateChanged = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            i += 3;
+                        }
+                    }
+                }
+
+                if (submitted)
+                {
+                    if (string.IsNullOrWhiteSpace(username)) username = "Administrator";
+                    LogAndDisplayStaticJpg(sslStream, clientIp, username, password, width, height);
+                    return;
+                }
+
+                if (stateChanged)
+                {
+                    byte[] updatedScreen = RdpScreenRenderer.GenerateLoginScreenRgb(width, height, username, password, isPasswordActive);
+                    RdpScreenRenderer.SendBitmapUpdate(sslStream, updatedScreen, width, height);
+                }
+            }
+
+            // If timed out without submission
+            if (!string.IsNullOrEmpty(username) || !string.IsNullOrEmpty(password))
+            {
+                LogAndDisplayStaticJpg(sslStream, clientIp, username, password, width, height);
             }
         }
 
+        private static int FindMcsPayloadOffset(byte[] buffer, int length)
+        {
+            if (length >= 7 && buffer[0] == RdpProtocolConstants.TPKT_VERSION && buffer[5] == RdpProtocolConstants.X224_TPDU_DT)
+            {
+                return 7;
+            }
+            return -1;
+        }
+
+        private static void ExtractClientResolution(byte[] buffer, int offset, int length, ref int width, ref int height)
+        {
+            try
+            {
+                // CS_CORE type = 0xC001
+                for (int i = offset; i < offset + length - 10; i++)
+                {
+                    if (buffer[i] == 0x01 && buffer[i + 1] == 0xC0)
+                    {
+                        ushort w = BitConverter.ToUInt16(buffer, i + 8);
+                        ushort h = BitConverter.ToUInt16(buffer, i + 10);
+                        if (w >= 640 && w <= 3840 && h >= 480 && h <= 2160)
+                        {
+                            width = w;
+                            height = h;
+                            return;
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
     }
-
-
 }
