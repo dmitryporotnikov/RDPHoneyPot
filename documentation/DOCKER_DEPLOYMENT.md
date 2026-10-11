@@ -1,23 +1,19 @@
-# Docker Deployment Guide
+# Docker deployment guide
 
-This guide describes how to build, deploy, and manage RDPHoney in a containerized environment using Docker and Docker Compose.
-
----
+How to build, deploy, and manage RDPHoney with Docker and Docker Compose.
 
 ## Prerequisites
 
 - [Docker Engine](https://docs.docker.com/engine/install/) (v20.10+) or [Docker Desktop](https://docs.docker.com/desktop/)
 - [Docker Compose](https://docs.docker.com/compose/) (v2.0+)
 
----
-
 ## Architecture in Docker
 
-When deployed via Docker Compose, the deployment consists of two services:
+The Compose deployment has two services:
 
-1. **`rdphoney`**: The .NET 10 LTS honeypot application listening on port `3389` (or a custom host port).
-2. **`db-admin`**: A lightweight SQLite web UI (`sqlite-web`) that mounts the same database file and exposes port `8080` to the host machine.
-3. **Host Data Volume (`./data`)**: The database file (`RdpHoneypotLogs.db`) is stored directly on the host machine filesystem inside the `./data` folder via bind mount.
+1. `rdphoney`: the .NET 10 honeypot application, listening on port `3389` (or a custom host port).
+2. `db-admin`: a lightweight SQLite web UI (`sqlite-web`) that mounts the same database file and exposes port `8080` to the host.
+3. Host data volume (`./data`): the database file (`RdpHoneypotLogs.db`) lives directly on the host filesystem in the `./data` folder through a bind mount.
 
 ```
 +-------------------------------------------------------------+
@@ -46,22 +42,25 @@ When deployed via Docker Compose, the deployment consists of two services:
 +-------------------------------------------------------------+
 ```
 
----
+## Deployment with Docker Compose
 
-## Quick Deployment with Docker Compose
+### Step 1: Clone the repository
 
-### Step 1: Clone the Repository
 ```bash
-git clone https://github.com/your-username/RDPHoneyPot.git
+git clone https://github.com/dmitryporotnikov/RDPHoneyPot.git
 cd RDPHoneyPot
 ```
 
-### Step 2: (Optional) Configure Environment Variables
+### Step 2: (Optional) Configure environment variables
+
 Copy the example environment file:
+
 ```bash
 cp .env.example .env
 ```
-Edit `.env` if you wish to customize ports or disable auto-banning during initial testing:
+
+Edit `.env` if you want custom ports or want to disable auto-banning during initial testing:
+
 ```ini
 HONEYPOT_PORT=3389
 DB_ADMIN_PORT=8080
@@ -70,70 +69,77 @@ DATABASE_PATH=/app/data/RdpHoneypotLogs.db
 AUTO_BAN_RDP_CLIENTS=false
 ```
 
-> **Note on Real Client IP Preservation**:
-> In standard Docker bridge networking, Docker's userland proxy applies Source NAT (SNAT), making all incoming connections appear to originate from the Docker gateway/bridge IP (e.g. `192.168.3.0` or `172.x.x.x`). `docker-compose.yml` uses **`network_mode: host`** on Linux, enabling the honeypot to see the actual attacker/client IP address directly from the kernel network stack without NAT.
+A note on real client IP preservation: in standard Docker bridge networking, Docker's userland proxy applies Source NAT (SNAT), so all incoming connections appear to come from the Docker gateway or bridge IP (for example `192.168.3.0` or `172.x.x.x`). `docker-compose.yml` uses `network_mode: host` on Linux, which lets the honeypot see the actual attacker or client IP straight from the kernel network stack, without NAT.
 
-### Step 3: Build and Start Containers
+### Step 3: Build and start the containers
+
 ```bash
 docker compose up -d --build
 ```
 
-### Step 4: Verify Services
-Check running containers:
+### Step 4: Verify the services
+
 ```bash
 docker compose ps
 ```
 
 Expected output:
+
 ```text
 NAME                 IMAGE                         STATUS         PORTS
 rdphoney             rdphoneypot-rdphoney          Up             0.0.0.0:3389->3389/tcp
 rdphoney-db-admin    ghcr.io/coleifer/sqlite-web   Up             0.0.0.0:8080->8080/tcp
 ```
 
-### Step 5: Check Honeypot Logs
+### Step 5: Check the honeypot logs
+
 ```bash
 docker compose logs -f rdphoney
 ```
 
----
+## Working with the database from the host
 
-## Interacting with the Database from the Host Machine
+`./data` is bind-mounted between the host and the containers, so you have several ways in:
 
-Because `./data` is bind-mounted between the host and container:
+### Method 1: Host web browser (no installation)
 
-### Method 1: Host Web Browser (Zero Installation)
-Navigate to:
+Open:
+
 ```text
 http://localhost:8080
 ```
-From the host machine, you will see the SQLite Web admin panel where you can browse `ConnectionLogs`, run SQL queries, filter by IP address, and export to CSV.
 
-### Method 2: Desktop SQLite GUI Tools
-Open the database file directly on the host machine:
+The SQLite web admin panel lets you browse `ConnectionLogs`, run SQL queries, filter by IP address, and export to CSV.
+
+### Method 2: Desktop SQLite GUI tools
+
+Open the database file directly on the host:
+
 ```text
 ./data/RdpHoneypotLogs.db
 ```
+
 Compatible tools:
-- **DB Browser for SQLite** (https://sqlitebrowser.org/)
-- **DBeaver** (https://dbeaver.io/)
-- **DataGrip** (JetBrains)
-- **VS Code SQLite Viewer Extension**
 
-> **Note**: RDPHoney uses SQLite **WAL (Write-Ahead Logging)** mode, meaning you can open, query, and inspect the database from host tools simultaneously without locking or halting the running honeypot!
+- DB Browser for SQLite (https://sqlitebrowser.org/)
+- DBeaver (https://dbeaver.io/)
+- DataGrip (JetBrains)
+- VS Code SQLite Viewer extension
 
----
+RDPHoney uses SQLite WAL (Write-Ahead Logging) mode, so you can open, query, and inspect the database from host tools while the honeypot keeps running, without locking it.
 
-## Standalone Docker Run (Without Compose)
+## Standalone Docker run (without Compose)
 
-If you prefer using pure `docker run`:
+If you prefer plain `docker run`:
 
-### 1. Build the Docker Image
+### 1. Build the image
+
 ```bash
 docker build -t rdphoney:latest .
 ```
 
-### 2. Create the Host Data Directory
+### 2. Create the host data directory
+
 ```bash
 # On Linux / macOS:
 mkdir -p data
@@ -142,7 +148,8 @@ mkdir -p data
 New-Item -ItemType Directory -Path "data" -Force
 ```
 
-### 3. Run the Container
+### 3. Run the container
+
 ```bash
 # On Linux / macOS:
 docker run -d \
@@ -161,32 +168,31 @@ docker run -d `
   rdphoney:latest
 ```
 
----
+## Exposing RDPHoney to the internet
 
-## Exposing RDPHoney to the Internet
+To collect real attacker traffic, port 3389 must be reachable from the public internet:
 
-To collect real-world attacker metrics, port 3389 must be accessible from the public internet:
-
-1. **Cloud Virtual Machines (AWS EC2, Azure VM, DigitalOcean, GCP)**:
-   - Configure Security Group / Firewall Rules:
-     - Allow Inbound `TCP` on port `3389` from `0.0.0.0/0`.
-     - Allow Inbound `TCP` on port `8080` **ONLY** from your personal administrative IP (never expose port 8080 to the public internet without authentication!).
-2. **On-Premise / Home Lab**:
-   - Set up Port Forwarding on your router: forward external port `3389` to your host machine's local IP on port `3389`.
+1. Cloud virtual machines (AWS EC2, Azure VM, DigitalOcean, GCP):
+   - Configure the security group or firewall rules:
+     - Allow inbound TCP on port `3389` from `0.0.0.0/0`.
+     - Allow inbound TCP on port `8080` only from your administrative IP. Never expose port 8080 to the public internet without authentication.
+2. On-premise or home lab:
+   - Set up port forwarding on your router: forward external port `3389` to the host machine's local IP on port `3389`.
    - Consider running RDPHoney in an isolated DMZ or VLAN.
 
----
+## Stopping and updating
 
-## Stopping and Updating
+Stop the services:
 
-### Stop Services
 ```bash
 docker compose down
 ```
 
-### Update to Latest Code
+Update to the latest code:
+
 ```bash
 git pull
 docker compose up -d --build
 ```
-Your database and attack logs remain completely intact in `./data/RdpHoneypotLogs.db`.
+
+The database and attack logs stay intact in `./data/RdpHoneypotLogs.db`.

@@ -1,8 +1,6 @@
-# RDPHoney Architecture
+# RDPHoney architecture
 
-## Overview
-
-RDPHoney is an enhanced low-to-medium interaction RDP (Remote Desktop Protocol) honeypot written in C# targeting **.NET 10 (LTS)**. It simulates the full initial RDP connection lifecycle (MS-RDPBCGR), including TLS negotiation, GCC/MCS negotiation, licensing, capabilities exchange, graphical screen rendering, and interactive credential capture.
+RDPHoney is a low-to-medium interaction RDP (Remote Desktop Protocol) honeypot written in C# on .NET 10 (LTS). It simulates the initial RDP connection lifecycle (MS-RDPBCGR) end to end: TLS negotiation, GCC/MCS negotiation, licensing, capabilities exchange, graphical screen rendering, and interactive credential capture.
 
 ```
                       +-----------------------------+
@@ -103,50 +101,50 @@ RDPHoney is an enhanced low-to-medium interaction RDP (Remote Desktop Protocol) 
                                                             +------------------+
 ```
 
----
+## Core components
 
-## Core Components
+### Program.cs
 
-### 1. `Program.cs`
-- **Application Entry Point**: Initializes the database schema, ensures static assets (`assets/desktop.jpg`) are ready, and hooks OS signals (`SIGINT`/`SIGTERM`/`ProcessExit`) for clean container termination.
+The application entry point. Initializes the database schema, makes sure the static assets (`assets/desktop.jpg`) are in place, and hooks OS signals (`SIGINT`, `SIGTERM`, `ProcessExit`) for clean container termination.
 
-### 2. `EnhancedRDPServerHoneypot.cs`
-- **TCP Listener**: Listens on `IPAddress.Any` on port 3389 (configurable via `HONEYPOT_PORT`).
-- **Connection Dispatcher**: Spawns a background thread per connection with a 30-second socket timeout.
+### EnhancedRDPServerHoneypot.cs
 
-### 3. `TlsCertificateManager.cs`
-- **Dynamic X.509 Certificate Generation**: Generates an in-memory 2048-bit RSA self-signed TLS certificate (`CN=WIN-SRV-HONEYPOT`) on the fly using .NET 10's native cryptography API. Requires zero external tools, scripts, or OpenSSL.
+The TCP listener is bound to `IPAddress.Any` on port 3389 (configurable through `HONEYPOT_PORT`). The connection dispatcher spawns a background thread per connection with a 30-second socket timeout.
 
-### 4. `RdpPacketHelper.cs`
-- **Binary PDU Construction**:
-  - Builds X.224 Connection Confirm specifying `PROTOCOL_SSL` (0x01).
-  - Formats ASN.1 BER-encoded GCC Conference Create Response for MCS Connect.
-  - Handles MCS AttachUserConfirm and ChannelJoinConfirm for User Channel 1002 and I/O Channel 1003.
-  - Constructs Server Licensing Valid Client PDU (`STATUS_VALID_CLIENT`).
-  - Encodes Demand Active PDU with General, Bitmap, Order, Pointer, and Input capability sets.
-  - Parses `TS_INFO_PACKET` payloads (both plain Unicode and scrambled passwords) used by automated brute-force tools (Hydra, Crowbar, Ncrack) or pre-authenticating RDP clients.
-  - Decodes Fast-Path keyboard scancodes to ASCII characters.
+### TlsCertificateManager.cs
 
-### 5. `RdpScreenRenderer.cs`
-- **Graphical Bitmap Streaming**:
-  - Converts images into 24bpp BGR uncompressed format.
-  - Slices images into strips of 10–16 rows to fit within Fast-Path PDU size limits (<32KB).
-  - Streams strips via Fast-Path Bitmap Updates (`FASTPATH_UPDATETYPE_BITMAP`).
-- **Interactive Login Screen**:
-  - Generates a Windows Server lock screen with avatar, header, username/password input boxes, cursor, and helper prompts.
-- **Static JPG Loading & Generation**:
-  - Automatically loads `assets/desktop.jpg` or a custom file specified via `STATIC_JPG_PATH`.
-  - Generates a default Windows Server desktop image (with taskbar, Start button, desktop icons, and system tray clock) if no static image is present on disk.
+Generates an in-memory 2048-bit RSA self-signed TLS certificate (`CN=WIN-SRV-HONEYPOT`) on the fly with .NET's native cryptography API. No external tools, scripts, or OpenSSL needed.
 
-### 6. `DatabaseLogger.cs`
-- **SQLite with WAL**: Thread-safe storage powered by `Microsoft.Data.Sqlite`.
-- **Extended Fields**: Records `IPAddress`, `Timestamp` (UTC ISO 8601), `Type` (`RDPClient` vs `PortScanner`), `Username`, and `Password`.
-- **Host Reachability**: Stored in `./data/RdpHoneypotLogs.db` via host volume mount.
+### RdpPacketHelper.cs
 
----
+Binary PDU construction:
 
-## Security Model
+- Builds the X.224 Connection Confirm specifying `PROTOCOL_SSL` (0x01).
+- Formats the ASN.1 BER-encoded GCC Conference Create Response for MCS Connect.
+- Handles MCS AttachUserConfirm and ChannelJoinConfirm for User Channel 1002 and I/O Channel 1003.
+- Constructs the Server Licensing Valid Client PDU (`STATUS_VALID_CLIENT`).
+- Encodes the Demand Active PDU with General, Bitmap, Order, Pointer, and Input capability sets.
+- Parses `TS_INFO_PACKET` payloads, in both plain Unicode and scrambled-password forms, as used by automated brute-force tools (Hydra, Crowbar, Ncrack) and by RDP clients that pre-authenticate.
+- Decodes Fast-Path keyboard scancodes to ASCII characters.
 
-1. **Non-Exploitable Simulation**: The honeypot does not execute arbitrary code, spawn shells, or authenticate against real system accounts.
-2. **Resource Isolation**: Socket timeouts prevent resource starvation, and repeating offenders are silently dropped before consuming TLS handshake overhead.
-3. **Container Isolation**: Running in Docker ensures complete separation from host operating system processes.
+### RdpScreenRenderer.cs
+
+Graphical bitmap streaming:
+
+- Converts images to 24bpp BGR uncompressed format.
+- Slices images into strips of 10 to 16 rows to fit within Fast-Path PDU size limits (under 32KB).
+- Streams the strips via Fast-Path Bitmap Updates (`FASTPATH_UPDATETYPE_BITMAP`).
+
+Interactive login screen: draws a Windows Server lock screen with avatar, header, username/password input boxes, cursor, and helper prompts.
+
+Static JPG loading and generation: loads `assets/desktop.jpg` or the file set through `STATIC_JPG_PATH`. If no static image exists on disk, it generates a default Windows Server desktop image (taskbar, Start button, desktop icons, system tray clock).
+
+### DatabaseLogger.cs
+
+Thread-safe SQLite storage through `Microsoft.Data.Sqlite`, running in WAL mode. Each row records `IPAddress`, `Timestamp` (UTC ISO 8601), `Type` (`RDPClient` or `PortScanner`), `Username`, and `Password`. The database is stored in `./data/RdpHoneypotLogs.db` through a host volume mount, so it is reachable from the host machine.
+
+## Security model
+
+1. The honeypot does not execute arbitrary code, spawn shells, or authenticate against real system accounts.
+2. Socket timeouts prevent resource starvation, and repeat offenders are dropped silently before they can spend TLS handshake overhead.
+3. Running in Docker separates the honeypot from the host operating system's processes.
