@@ -1,143 +1,126 @@
 # RDPHoneyPot
 
-A lightweight, high-performance RDP honeypot designed to attract, analyze, and inspect Remote Desktop Protocol (RDP) based attacks and scans, developed in C# and powered by **.NET 10 (LTS)**.
-
----
+A lightweight RDP honeypot for attracting and analyzing Remote Desktop Protocol (RDP) attacks and scans, written in C# and running on .NET 10 (LTS).
 
 ## Features
 
-- **Protocol Simulation & TLS Negotiation**: Implements full MS-RDPBCGR negotiation with dynamic self-signed X.509 certificate generation, distinguishing real RDP clients from automated port scanners.
-- **Login / Password Prompt Presentation**:
-  - **Interactive Clients (`mstsc.exe`, FreeRDP)**: Renders a graphical Windows logon screen, captures keystrokes in real time (Fast-Path input), and accepts any submitted credentials.
-  - **Brute-Force Tools (Hydra, Crowbar, Ncrack)**: Extracts usernames and passwords directly from protocol-level Client Info PDUs (`TS_INFO_PACKET`).
-- **Credential Logging**: Automatically records captured usernames, passwords, IP addresses, and UTC timestamps to the SQLite database.
-- **Static JPG Screen Rendering**: Streams an authentic static desktop image (or custom JPG) to the client's screen upon successful authentication via Fast-Path Bitmap Updates.
-- **Randomized Disconnect**: Holds the authenticated session for **3 to 6 seconds at random** before gracefully disconnecting the user.
-- **Automated Drop Policy**: Silently drops connections from IP addresses previously logged as RDP exploiters to prevent resource exhaustion.
-- **Built on .NET 10 (LTS)**: Native cross-platform execution with modern C# and zero native dependencies.
-- **Docker & Docker Compose Ready**: Deployable with a single command via Docker Compose with health monitoring and graceful shutdown.
-- **Host-Accessible Database**: Stores logs in `./data/RdpHoneypotLogs.db` via host volume mount. Configured with **WAL (Write-Ahead Logging)** mode for concurrent inspection without locking.
-- **Host Web Database UI**: Includes a web-based database management interface (`sqlite-web`) accessible from the host machine at `http://localhost:8080`.
-- **Threat Intelligence Enrichment**: Includes PowerShell tooling (`EnrichReportWithIPDB.ps1`) to enrich collected attack logs with AbuseIPDB confidence scores, ISP details, geolocations, and Tor node identification.
+- Full MS-RDPBCGR negotiation with a dynamically generated self-signed X.509 certificate, so real RDP clients can be told apart from automated port scanners.
+- Interactive clients (`mstsc.exe`, FreeRDP) get a graphical Windows logon screen, real-time Fast-Path keystroke capture, and any credentials they submit are accepted.
+- Brute-force tools (Hydra, Crowbar, Ncrack) send usernames and passwords in the protocol-level Client Info PDU (`TS_INFO_PACKET`), which the honeypot extracts directly.
+- Captured usernames, passwords, IP addresses, and UTC timestamps are recorded to the SQLite database.
+- After authentication, the client's screen shows a static desktop image (or a custom JPG) streamed via Fast-Path bitmap updates.
+- The authenticated session is held for 3 to 6 seconds at random, then disconnected.
+- Connections from IP addresses previously logged as RDP exploiters are dropped before they can consume TLS handshake resources.
+- Runs on .NET 10 (LTS) cross-platform, with no native dependencies.
+- Deploys with a single `docker compose up` command, with health monitoring and graceful shutdown.
+- The database is stored at `./data/RdpHoneypotLogs.db` through a host volume mount and runs in WAL (Write-Ahead Logging) mode, so it can be inspected from the host while the honeypot keeps writing.
+- A web database management UI (`sqlite-web`) is reachable from the host at `http://localhost:8080`.
+- A PowerShell script (`EnrichReportWithIPDB.ps1`) enriches the collected attack logs with AbuseIPDB confidence scores, ISP details, geolocations, and Tor node identification.
 
 ![Screenshot](screenshot.png)
 
----
-
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
-Choose one of the following:
-- **Docker & Docker Compose** (recommended for production/isolated deployment)
-- **.NET 10.0 SDK** (for local development or native execution)
+One of the following:
 
----
+- Docker & Docker Compose (recommended for production or isolated deployment)
+- .NET 10.0 SDK (for local development or native execution)
 
-### Option 1: Deploy with Docker Compose (Recommended)
+### Option 1: Deploy with Docker Compose (recommended)
 
-1. **Clone the repository**:
+1. Clone the repository:
    ```bash
    git clone https://github.com/dmitryporotnikov/RDPHoneyPot.git
    cd RDPHoneyPot
    ```
 
-2. **Launch the honeypot and database web UI**:
+2. Start the honeypot and the database web UI:
    ```bash
    docker compose up -d --build
    ```
 
-3. **Verify running containers**:
+3. Check the running containers:
    ```bash
    docker compose ps
    ```
 
-The honeypot is now listening on port `3389` and the database is accessible at `http://localhost:8080`.
+The honeypot is now listening on port `3389`, and the database is accessible at `http://localhost:8080`.
 
----
+### Option 2: Run natively with the .NET 10 SDK
 
-### Option 2: Run Natively with .NET 10 SDK
-
-1. **Clone and restore dependencies**:
+1. Clone the repository and restore dependencies:
    ```bash
-   git clone https://github.com/your-username/RDPHoneyPot.git
+   git clone https://github.com/dmitryporotnikov/RDPHoneyPot.git
    cd RDPHoneyPot
    dotnet restore
    ```
 
-2. **Build the project**:
+2. Build the project:
    ```bash
    dotnet build -c Release
    ```
 
-3. **Run the honeypot**:
+3. Run the honeypot:
    ```bash
    dotnet run --project RDPHoney -c Release
    ```
 
-4. **Run tests**:
+4. Run the tests:
    ```bash
    dotnet test
    ```
 
----
+## Credential capture and static JPG display
 
-## Credential Capture & Static JPG Simulation
+1. When a user or tool connects:
+   - Credentials sent in the initial connection packet (typically brute-force tools) are captured immediately.
+   - An interactive user (for example, via Windows Remote Desktop, `mstsc.exe`) is shown a graphical Windows login prompt.
+2. Acceptance and logging:
+   - The honeypot accepts any username and password entered.
+   - Credentials are saved to `./data/RdpHoneypotLogs.db` in the `ConnectionLogs` table (`Username`, `Password`, `IPAddress`, `Timestamp`).
+3. Static JPG display:
+   - The honeypot renders `assets/desktop.jpg` to the client's screen.
+   - To customize it, replace `assets/desktop.jpg` or set `STATIC_JPG_PATH` in `.env`.
+4. Disconnect:
+   - After a randomized delay of 3 to 6 seconds, the honeypot disconnects the session.
 
-1. **When a user or tool connects**:
-   - If credentials are sent in the initial connection packet (e.g. brute-force tools), they are captured immediately.
-   - If an interactive user connects (e.g. via Windows Remote Desktop `mstsc.exe`), they are presented with a graphical Windows login prompt.
-2. **Acceptance & Logging**:
-   - The honeypot accepts any username and password entered by the user.
-   - Credentials are saved to `./data/RdpHoneypotLogs.db` under the `ConnectionLogs` table (`Username`, `Password`, `IPAddress`, `Timestamp`).
-3. **Static JPG Display**:
-   - The honeypot renders `assets/desktop.jpg` to the user's screen.
-   - You can customize this by replacing `assets/desktop.jpg` or setting `STATIC_JPG_PATH` in `.env`.
-4. **Randomized Disconnect**:
-   - After a randomized delay of **3 to 6 seconds**, the honeypot disconnects the session.
+## Working with the database from the host
 
----
+When running in Docker, the database is persisted to `./data/RdpHoneypotLogs.db` on the host. RDPHoney uses SQLite Write-Ahead Logging (WAL), so an administrator can query the database while the honeypot is actively capturing traffic:
 
-## Interacting with the Database from the Host Machine
-
-When running in Docker, the database is persisted to `./data/RdpHoneypotLogs.db` on your host machine. Because RDPHoney uses SQLite **Write-Ahead Logging (WAL)**, the host administrator can query and interact with the database while the honeypot is actively capturing traffic:
-
-1. **Web Admin UI**: Open your host browser to `http://localhost:8080` to query tables, filter captured credentials, and export CSV/JSON data.
-2. **Desktop GUI Tools**: Open `./data/RdpHoneypotLogs.db` in **DB Browser for SQLite** (as seen in the screenshot above), **DBeaver**, or **DataGrip**.
-3. **Command Line**: Inspect logs using `sqlite3`:
+1. Web admin UI: open `http://localhost:8080` in a browser on the host to query tables, filter captured credentials, and export CSV or JSON.
+2. Desktop GUI tools: open `./data/RdpHoneypotLogs.db` in DB Browser for SQLite (shown in the screenshot above), DBeaver, or DataGrip.
+3. Command line: inspect the logs with `sqlite3`:
    ```bash
    sqlite3 -header -column data/RdpHoneypotLogs.db "SELECT Id, IPAddress, Username, Password FROM ConnectionLogs WHERE Username IS NOT NULL;"
    ```
 
----
-
 ## Configuration
 
-RDPHoney supports configuration via environment variables (or via `.env` with Docker Compose):
+RDPHoney is configured through environment variables (or a `.env` file with Docker Compose):
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `HONEYPOT_PORT` | `3389` | TCP port on which the honeypot listens for RDP traffic. |
-| `DATABASE_PATH` | `data/RdpHoneypotLogs.db` | File path to the SQLite database file. |
-| `DB_ADMIN_PORT` | `8080` | Port for the SQLite Web administration UI in Docker Compose. |
+| `HONEYPOT_PORT` | `3389` | TCP port the honeypot listens on for RDP traffic. |
+| `DATABASE_PATH` | `data/RdpHoneypotLogs.db` | File path to the SQLite database. |
+| `DB_ADMIN_PORT` | `8080` | Port for the SQLite web admin UI in Docker Compose. |
 | `STATIC_JPG_PATH` | `assets/desktop.jpg` | Path to the static JPG rendered to authenticated users. |
+| `AUTO_BAN_RDP_CLIENTS` | `true` | Drop connections from IP addresses already logged as RDP clients. |
 
-See the [Configuration Guide](documentation/CONFIGURATION.md) for full details.
-
----
+The [configuration guide](documentation/CONFIGURATION.md) lists the full set, including alias variables.
 
 ## Documentation
 
-Detailed documentation is available in the [`documentation/`](documentation/) directory:
+Detailed documentation lives in the [`documentation/`](documentation/) directory:
 
-- [**System Architecture**](documentation/ARCHITECTURE.md) — Honeypot packet handling, protocol simulation, credential capture, and classification logic.
-- [**Docker Deployment Guide**](documentation/DOCKER_DEPLOYMENT.md) — Complete setup, host volume mounts, cloud firewall rules, and container management.
-- [**Database Guide**](documentation/DATABASE_GUIDE.md) — Schema breakdown, WAL mode concurrency, credential queries, and host interaction tools.
-- [**Configuration Guide**](documentation/CONFIGURATION.md) — Environment variables, custom ports, and static JPG customization.
-- [**Threat Intelligence & Enrichment**](documentation/ANALYSIS_AND_ENRICHMENT.md) — Using `EnrichReportWithIPDB.ps1` with AbuseIPDB and exporting to SIEM.
-
----
+- [System architecture](documentation/ARCHITECTURE.md): packet handling, protocol simulation, credential capture, and connection classification.
+- [Docker deployment guide](documentation/DOCKER_DEPLOYMENT.md): setup, host volume mounts, cloud firewall rules, and container management.
+- [Database guide](documentation/DATABASE_GUIDE.md): schema, WAL mode concurrency, credential queries, and host access tools.
+- [Configuration guide](documentation/CONFIGURATION.md): environment variables, custom ports, and static JPG customization.
+- [Threat intelligence and enrichment](documentation/ANALYSIS_AND_ENRICHMENT.md): using `EnrichReportWithIPDB.ps1` with AbuseIPDB and exporting to a SIEM.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
