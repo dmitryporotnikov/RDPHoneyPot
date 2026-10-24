@@ -6,11 +6,17 @@ services:
       dockerfile: Dockerfile
     container_name: rdphoney
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
     ports:
       - "${HONEYPOT_PORT:-3389}:${HONEYPOT_PORT:-3389}"
     environment:
       - DATABASE_PATH=/app/data/RdpHoneypotLogs.db
       - HONEYPOT_PORT=${HONEYPOT_PORT:-3389}
+      - MAX_CONCURRENT_CONNECTIONS=${MAX_CONCURRENT_CONNECTIONS:-64}
       - STATIC_JPG_PATH=/app/assets/desktop.jpg
       - AUTO_BAN_RDP_CLIENTS=${AUTO_BAN_RDP_CLIENTS:-true}
       - ABUSEIPDB_API_KEY=${ABUSEIPDB_API_KEY:-}
@@ -23,13 +29,18 @@ services:
       # Host bind mount: allows admin to customize static JPG without rebuilding container
       - ./assets:/app/assets
 
-  # Database Web Administration UI (reachable from host machine at http://localhost:8080)
+  # Database Web Administration UI (bound strictly to 127.0.0.1 so it is never exposed to the public internet)
   db-admin:
     image: ghcr.io/coleifer/sqlite-web:latest
     container_name: rdphoney-db-admin
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
     ports:
-      - "${DB_ADMIN_PORT:-8080}:${DB_ADMIN_PORT:-8080}"
+      - "127.0.0.1:${DB_ADMIN_PORT:-8080}:${DB_ADMIN_PORT:-8080}"
     volumes:
       - ./data:/data
     entrypoint:
@@ -37,6 +48,6 @@ services:
       - -c
       - |
         touch /data/RdpHoneypotLogs.db
-        exec sqlite_web -H 0.0.0.0 -p ${DB_ADMIN_PORT:-8080} -x /data/RdpHoneypotLogs.db
+        exec sqlite_web -H 0.0.0.0 -p ${DB_ADMIN_PORT:-8080} -r -x /data/RdpHoneypotLogs.db
     depends_on:
       - rdphoney

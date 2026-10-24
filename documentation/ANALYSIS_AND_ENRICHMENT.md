@@ -1,6 +1,25 @@
-# Analysis and threat intelligence enrichment
+# Analysis, auto-reporting, and threat intelligence enrichment
 
-Collecting honeypot telemetry is the first step. This guide covers exporting, analyzing, and enriching RDPHoney logs with threat intelligence feeds such as AbuseIPDB.
+Collecting honeypot telemetry is the first step. This guide covers automatic AbuseIPDB reporting of banned RDP clients as well as exporting, analyzing, and enriching RDPHoney logs offline.
+
+## 0. Real-time automatic AbuseIPDB reporting
+
+RDPHoney can automatically report every attacker IP that completes an RDP handshake (`Type = 'RDPClient'`) to the [AbuseIPDB APIv2 `/report` endpoint](https://docs.abuseipdb.com/#report-endpoint) as soon as the IP is logged and banned:
+
+1. Set `ABUSEIPDB_API_KEY` in `.env` or your container environment:
+
+   ```ini
+   ABUSEIPDB_API_KEY=your_abuseipdb_api_v2_key
+   ABUSEIPDB_ENABLED=true
+   ABUSEIPDB_CATEGORIES=18,15
+   ABUSEIPDB_EXCLUDED_IPS=
+   ```
+
+2. When an attacker connects via RDP, RDPHoney:
+   - Logs the attempt and credentials in SQLite (`ConnectionLogs`).
+   - Checks that the IP is a valid public IP (automatically excluding loopback, RFC 1918 private, Docker bridge, CGNAT, link-local, `ABUSEIPDB_EXCLUDED_IPS`, and the host's own public IP resolved via `api.ipify.org`).
+   - Verifies the IP has not already been reported within the last 15 minutes.
+   - Submits a report to `https://api.abuseipdb.com/api/v2/report` with categories `18,15` (Brute-Force, Hacking) and records `ReportedToAbuseIPDB = 1` and the returned `AbuseConfidenceScore` in SQLite.
 
 ## 1. Exporting logs from the database
 

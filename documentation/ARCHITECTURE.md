@@ -141,10 +141,14 @@ Static JPG loading and generation: loads `assets/desktop.jpg` or the file set th
 
 ### DatabaseLogger.cs
 
-Thread-safe SQLite storage through `Microsoft.Data.Sqlite`, running in WAL mode. Each row records `IPAddress`, `Timestamp` (UTC ISO 8601), `Type` (`RDPClient` or `PortScanner`), `Username`, and `Password`. The database is stored in `./data/RdpHoneypotLogs.db` through a host volume mount, so it is reachable from the host machine.
+Thread-safe SQLite storage through `Microsoft.Data.Sqlite`, running in WAL mode. Each row records `IPAddress`, `Timestamp` (UTC ISO 8601), `Type` (`RDPClient`, `PortScanner`, or `TLSFailed`), `Username`, `Password`, `ReportedToAbuseIPDB`, and `AbuseConfidenceScore`. The database is stored in `./data/RdpHoneypotLogs.db` through a host volume mount, so it is reachable from the host machine.
+
+### AbuseIpDbReporter.cs
+
+Automatic threat-intelligence reporting to AbuseIPDB APIv2 (`/api/v2/report`) and IP reputation lookup (`/api/v2/check`). When `ABUSEIPDB_API_KEY` is configured, any IP classified and banned as `RDPClient` is reported in the background with categories `18,15` (Brute-Force, Hacking). Built-in safeguards ensure loopback, private RFC 1918, link-local, CGNAT, `ABUSEIPDB_EXCLUDED_IPS`, and the host's own public IP (`api.ipify.org`) are never reported, and enforce a 15-minute per-IP reporting cooldown.
 
 ## Security model
 
-1. The honeypot does not execute arbitrary code, spawn shells, or authenticate against real system accounts.
-2. Socket timeouts prevent resource starvation, and repeat offenders are dropped silently before they can spend TLS handshake overhead.
-3. Running in Docker separates the honeypot from the host operating system's processes.
+1. **No Shell or OS Authentication Execution:** The honeypot is a pure protocol state-machine simulation. It never spawns processes, never loads a real desktop or shell, ignores virtual channel payloads (`rdpdr`, `cliprdr`, etc.), and never calls OS authentication APIs.
+2. **DoS & Memory Hardening:** Concurrent sessions are bounded by a `SemaphoreSlim` (`MAX_CONCURRENT_CONNECTIONS`, default `64`), client framebuffer dimensions are clamped to a maximum of `1920x1080`, the static desktop JPG is cached in memory, socket operations enforce timeouts, and repeat offenders are dropped before the TLS handshake.
+3. **Container & Admin UI Lockdown:** Both containers run with `no-new-privileges:true`, `cap_drop: [ALL]`, and memory limits. The `sqlite-web` admin console (`db-admin`) runs in read-only mode (`-r`) and binds strictly to `127.0.0.1:8080` so it is never exposed to the public internet.

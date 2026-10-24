@@ -15,8 +15,8 @@ RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS final
 WORKDIR /app
 
-# Ensure data and assets directories exist
-RUN mkdir -p /app/data /app/assets
+# Ensure data and assets directories exist with proper permissions
+RUN mkdir -p /app/data /app/assets && chmod -R 775 /app/data /app/assets
 
 # Copy build artifacts
 COPY --from=build /app/publish .
@@ -27,6 +27,7 @@ COPY assets/ /app/assets/
 # Environment configuration
 ENV DATABASE_PATH=/app/data/RdpHoneypotLogs.db \
     HONEYPOT_PORT=3389 \
+    MAX_CONCURRENT_CONNECTIONS=64 \
     DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true
 
 # Expose default RDP honeypot port

@@ -790,10 +790,13 @@ namespace RDPHoney
                         {
                             ushort w = BitConverter.ToUInt16(buffer, i + 8);
                             ushort h = BitConverter.ToUInt16(buffer, i + 10);
-                            if (w >= 320 && w <= 4096 && h >= 200 && h <= 2160)
+                            if (w >= 320 && h >= 200)
                             {
-                                width = (w / 4) * 4;
-                                height = h;
+                                // Cap resolution to 1920x1080 to prevent memory exhaustion DoS from spoofed dimensions
+                                int clampedW = Math.Min((int)w, 1920);
+                                int clampedH = Math.Min((int)h, 1080);
+                                width = (clampedW / 4) * 4;
+                                height = clampedH;
                             }
 
                             ushort colorDepth = BitConverter.ToUInt16(buffer, i + 12);
@@ -856,10 +859,12 @@ namespace RDPHoney
                         {
                             bpp = prefBpp;
                         }
-                        if (w >= 320 && w <= 4096 && h >= 200 && h <= 2160)
+                        if (w >= 320 && h >= 200)
                         {
-                            width = (w / 4) * 4;
-                            height = h;
+                            int clampedW = Math.Min((int)w, 1920);
+                            int clampedH = Math.Min((int)h, 1080);
+                            width = (clampedW / 4) * 4;
+                            height = clampedH;
                         }
                     }
 

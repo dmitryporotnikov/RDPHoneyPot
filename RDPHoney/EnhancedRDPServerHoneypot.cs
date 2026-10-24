@@ -20,16 +20,32 @@ namespace RDPHoney
     {
         private readonly TcpListener _listener;
         private readonly int _port;
+        private readonly int _maxConcurrentConnections;
+        private readonly SemaphoreSlim _concurrencyLimiter;
         private readonly CancellationTokenSource _cts = new();
         private bool _isRunning;
 
         public int Port => _port;
+        public int MaxConcurrentConnections => _maxConcurrentConnections;
         public bool IsRunning => _isRunning;
 
-        public EnhancedRDPServerHoneypot(int? port = null)
+        public EnhancedRDPServerHoneypot(int? port = null, int? maxConcurrentConnections = null)
         {
             _port = port ?? ResolvePort();
+            _maxConcurrentConnections = maxConcurrentConnections ?? ResolveMaxConcurrentConnections();
+            _concurrencyLimiter = new SemaphoreSlim(_maxConcurrentConnections, _maxConcurrentConnections);
             _listener = new TcpListener(IPAddress.Any, _port);
+        }
+
+        public static int ResolveMaxConcurrentConnections()
+        {
+            var envMax = Environment.GetEnvironmentVariable("MAX_CONCURRENT_CONNECTIONS");
+            if (!string.IsNullOrWhiteSpace(envMax) && int.TryParse(envMax, out int parsedMax) && parsedMax > 0 && parsedMax <= 1024)
+            {
+                return parsedMax;
+            }
+
+            return 64;
         }
 
         public static int ResolvePort()
@@ -58,13 +74,26 @@ namespace RDPHoney
                     try
                     {
                         var client = _listener.AcceptTcpClient();
+                        if (!_concurrencyLimiter.Wait(0))
+                        {
+                            Console.WriteLine("Max concurrent connections reached. Dropping incoming connection.");
+                            try { client.Close(); } catch { }
+                            continue;
+                        }
+
                         Console.WriteLine("Client connected. Starting RDP handshake...");
 
-                        var clientThread = new Thread(() => new RdpConnectionHandler().HandleClient(client))
+                        _ = ThreadPool.QueueUserWorkItem(_ =>
                         {
-                            IsBackground = true
-                        };
-                        clientThread.Start();
+                            try
+                            {
+                                new RdpConnectionHandler().HandleClient(client);
+                            }
+                            finally
+                            {
+                                _concurrencyLimiter.Release();
+                            }
+                        });
                     }
                     catch (SocketException) when (_cts.IsCancellationRequested)
                     {

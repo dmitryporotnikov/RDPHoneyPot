@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS ConnectionLogs (
     Timestamp TEXT NOT NULL,
     Type TEXT NOT NULL,
     Username TEXT NULL,
-    Password TEXT NULL
+    Password TEXT NULL,
+    ReportedToAbuseIPDB INTEGER NOT NULL DEFAULT 0,
+    AbuseConfidenceScore INTEGER NULL
 );
 
 CREATE INDEX IF NOT EXISTS IX_ConnectionLogs_IPAddress_Type 
@@ -34,9 +36,11 @@ CREATE INDEX IF NOT EXISTS IX_ConnectionLogs_IPAddress_Type
 | `Id` | INTEGER | No | Auto-incrementing primary key | `1` |
 | `IPAddress` | TEXT | No | Source IPv4 or IPv6 address | `198.51.100.25` |
 | `Timestamp` | TEXT | No | UTC timestamp in ISO 8601 format | `2026-09-27 10:15:30.1234567Z` |
-| `Type` | TEXT | No | Classification (`RDPClient` or `PortScanner`) | `RDPClient` |
-| `Username` | TEXT | Yes | Captured username (from the login prompt or Client Info PDU) | `administrator` |
+| `Type` | TEXT | No | Classification (`RDPClient`, `PortScanner`, or `TLSFailed`) | `RDPClient` |
+| `Username` | TEXT | Yes | Captured username (from the login prompt, Client Info PDU, or X.224 cookie) | `administrator` |
 | `Password` | TEXT | Yes | Password submitted by the attacker | `P@ssw0rd2026!` |
+| `ReportedToAbuseIPDB` | INTEGER | No | `1` if automatically reported to AbuseIPDB, `0` otherwise | `1` |
+| `AbuseConfidenceScore` | INTEGER | Yes | AbuseConfidenceScore (0–100) returned by AbuseIPDB upon reporting | `100` |
 
 ## Accessing the database from the host
 

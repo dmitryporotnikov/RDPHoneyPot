@@ -11,6 +11,13 @@ namespace RDPHoney
 
     public static class RdpScreenRenderer
     {
+        private static readonly object _imageCacheLock = new();
+        private static string? _cachedImagePath;
+        private static DateTime _cachedImageWriteTimeUtc;
+        private static byte[]? _cachedImageRgb;
+        private static int _cachedImageWidth;
+        private static int _cachedImageHeight;
+
         public static string GetStaticJpgPath()
         {
             var env = Environment.GetEnvironmentVariable("STATIC_JPG_PATH")
@@ -49,6 +56,9 @@ namespace RDPHoney
 
         public static byte[] LoadStaticJpgRgb(int targetWidth, int targetHeight)
         {
+            targetWidth = Math.Clamp(targetWidth, 64, 1920);
+            targetHeight = Math.Clamp(targetHeight, 64, 1080);
+
             EnsureDefaultStaticJpgExists();
             string path = GetStaticJpgPath();
 
@@ -56,16 +66,43 @@ namespace RDPHoney
             {
                 try
                 {
-                    byte[] fileBytes = File.ReadAllBytes(path);
-                    var image = ImageResult.FromMemory(fileBytes, StbImageSharp.ColorComponents.RedGreenBlue);
+                    byte[] srcData;
+                    int srcW;
+                    int srcH;
 
-                    if (image.Width == targetWidth && image.Height == targetHeight)
+                    DateTime lastWrite = File.GetLastWriteTimeUtc(path);
+                    lock (_imageCacheLock)
                     {
-                        return image.Data;
+                        if (_cachedImageRgb != null &&
+                            string.Equals(_cachedImagePath, path, StringComparison.Ordinal) &&
+                            _cachedImageWriteTimeUtc == lastWrite)
+                        {
+                            srcData = _cachedImageRgb;
+                            srcW = _cachedImageWidth;
+                            srcH = _cachedImageHeight;
+                        }
+                        else
+                        {
+                            byte[] fileBytes = File.ReadAllBytes(path);
+                            var image = ImageResult.FromMemory(fileBytes, StbImageSharp.ColorComponents.RedGreenBlue);
+                            _cachedImagePath = path;
+                            _cachedImageWriteTimeUtc = lastWrite;
+                            _cachedImageRgb = image.Data;
+                            _cachedImageWidth = image.Width;
+                            _cachedImageHeight = image.Height;
+                            srcData = image.Data;
+                            srcW = image.Width;
+                            srcH = image.Height;
+                        }
+                    }
+
+                    if (srcW == targetWidth && srcH == targetHeight)
+                    {
+                        return srcData;
                     }
 
                     // Rescale / crop to target dimensions
-                    return RescaleRgb(image.Data, image.Width, image.Height, targetWidth, targetHeight);
+                    return RescaleRgb(srcData, srcW, srcH, targetWidth, targetHeight);
                 }
                 catch (Exception ex)
                 {
