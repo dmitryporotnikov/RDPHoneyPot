@@ -76,7 +76,9 @@ namespace RDPHoney
                                 Timestamp TEXT NOT NULL,
                                 Type TEXT NOT NULL,
                                 Username TEXT NULL,
-                                Password TEXT NULL
+                                Password TEXT NULL,
+                                ReportedToAbuseIPDB INTEGER NOT NULL DEFAULT 0,
+                                AbuseConfidenceScore INTEGER NULL
                             );
                             CREATE INDEX IF NOT EXISTS IX_ConnectionLogs_IPAddress_Type 
                                 ON ConnectionLogs (IPAddress, Type);
@@ -84,7 +86,7 @@ namespace RDPHoney
                         command.ExecuteNonQuery();
                     }
 
-                    // Auto-migrate schema if Username and Password columns are missing in an existing database
+                    // Auto-migrate schema if columns are missing in an existing database
                     MigrateSchema(connection);
                 }
 
@@ -101,12 +103,16 @@ namespace RDPHoney
                 using var reader = checkCmd.ExecuteReader();
                 bool hasUsername = false;
                 bool hasPassword = false;
+                bool hasReported = false;
+                bool hasScore = false;
 
                 while (reader.Read())
                 {
                     string colName = reader.GetString(1);
                     if (string.Equals(colName, "Username", StringComparison.OrdinalIgnoreCase)) hasUsername = true;
                     if (string.Equals(colName, "Password", StringComparison.OrdinalIgnoreCase)) hasPassword = true;
+                    if (string.Equals(colName, "ReportedToAbuseIPDB", StringComparison.OrdinalIgnoreCase)) hasReported = true;
+                    if (string.Equals(colName, "AbuseConfidenceScore", StringComparison.OrdinalIgnoreCase)) hasScore = true;
                 }
                 reader.Close();
 
@@ -121,6 +127,20 @@ namespace RDPHoney
                 {
                     using var addCol = connection.CreateCommand();
                     addCol.CommandText = "ALTER TABLE ConnectionLogs ADD COLUMN Password TEXT NULL;";
+                    addCol.ExecuteNonQuery();
+                }
+
+                if (!hasReported)
+                {
+                    using var addCol = connection.CreateCommand();
+                    addCol.CommandText = "ALTER TABLE ConnectionLogs ADD COLUMN ReportedToAbuseIPDB INTEGER NOT NULL DEFAULT 0;";
+                    addCol.ExecuteNonQuery();
+                }
+
+                if (!hasScore)
+                {
+                    using var addCol = connection.CreateCommand();
+                    addCol.CommandText = "ALTER TABLE ConnectionLogs ADD COLUMN AbuseConfidenceScore INTEGER NULL;";
                     addCol.ExecuteNonQuery();
                 }
             }
@@ -149,7 +169,9 @@ namespace RDPHoney
                             Timestamp TEXT NOT NULL,
                             Type TEXT NOT NULL,
                             Username TEXT NULL,
-                            Password TEXT NULL
+                            Password TEXT NULL,
+                            ReportedToAbuseIPDB INTEGER NOT NULL DEFAULT 0,
+                            AbuseConfidenceScore INTEGER NULL
                         );
                         INSERT INTO ConnectionLogs (IPAddress, Timestamp, Type, Username, Password) 
                         VALUES ($IPAddress, $Timestamp, $Type, $Username, $Password);";
@@ -161,6 +183,49 @@ namespace RDPHoney
                     command.ExecuteNonQuery();
                 }
             }
+        }
+
+        public static bool HasIpBeenReportedRecently(string ipAddress, TimeSpan cooldown)
+        {
+            if (!_isInitialized || !File.Exists(_dbFilePath))
+            {
+                InitializeDatabase();
+            }
+
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            string cutoff = DateTime.UtcNow.Subtract(cooldown).ToString("yyyy-MM-dd HH:mm:ss.fffffffZ");
+            command.CommandText = @"
+                SELECT COUNT(*) FROM ConnectionLogs
+                WHERE IPAddress = $IPAddress
+                  AND ReportedToAbuseIPDB = 1
+                  AND Timestamp >= $Cutoff;";
+            command.Parameters.AddWithValue("$IPAddress", ipAddress);
+            command.Parameters.AddWithValue("$Cutoff", cutoff);
+
+            var result = command.ExecuteScalar();
+            return Convert.ToInt64(result) > 0;
+        }
+
+        public static void MarkIpAsReported(string ipAddress, int? abuseConfidenceScore)
+        {
+            if (!_isInitialized || !File.Exists(_dbFilePath))
+            {
+                InitializeDatabase();
+            }
+
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+                UPDATE ConnectionLogs
+                SET ReportedToAbuseIPDB = 1,
+                    AbuseConfidenceScore = $Score
+                WHERE IPAddress = $IPAddress AND Type = 'RDPClient';";
+            command.Parameters.AddWithValue("$IPAddress", ipAddress);
+            command.Parameters.AddWithValue("$Score", (object?)abuseConfidenceScore ?? DBNull.Value);
+            command.ExecuteNonQuery();
         }
 
         public static bool CheckIfRdpClientExists(string ipAddress)

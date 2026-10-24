@@ -152,7 +152,7 @@ namespace RDPHoney
                     byte[]? mcsConnectInitial = RdpPacketHelper.ReadNextPdu(sslStream);
                     if (mcsConnectInitial == null || mcsConnectInitial.Length == 0)
                     {
-                        DatabaseLogger.LogConnection(clientIP, "RDPClient", string.IsNullOrEmpty(cookieUsername) ? null : cookieUsername, null);
+                        LogAndReportRdpClient(clientIP, string.IsNullOrEmpty(cookieUsername) ? null : cookieUsername, null);
                         return;
                     }
 
@@ -176,7 +176,7 @@ namespace RDPHoney
                         if (mcsPdu == null || mcsPdu.Length == 0)
                         {
                             Console.WriteLine($"Stream closed by {clientIP} during MCS channel join phase.");
-                            DatabaseLogger.LogConnection(clientIP, "RDPClient", string.IsNullOrEmpty(capturedUsername) ? null : capturedUsername, null);
+                            LogAndReportRdpClient(clientIP, string.IsNullOrEmpty(capturedUsername) ? null : capturedUsername, null);
                             return;
                         }
 
@@ -211,7 +211,7 @@ namespace RDPHoney
                         }
                         else if (mcsChoice == 8) // DisconnectProviderUltimatum
                         {
-                            DatabaseLogger.LogConnection(clientIP, "RDPClient", string.IsNullOrEmpty(capturedUsername) ? null : capturedUsername, null);
+                            LogAndReportRdpClient(clientIP, string.IsNullOrEmpty(capturedUsername) ? null : capturedUsername, null);
                             return;
                         }
                         else
@@ -317,7 +317,7 @@ namespace RDPHoney
                 catch (IOException ex)
                 {
                     Console.WriteLine($"Network error with {clientIP}: {ex.Message}");
-                    DatabaseLogger.LogConnection(clientIP, "RDPClient");
+                    LogAndReportRdpClient(clientIP);
                 }
                 catch (Exception ex)
                 {
@@ -328,6 +328,12 @@ namespace RDPHoney
                     try { client.Close(); } catch { }
                 }
             }
+        }
+
+        private static void LogAndReportRdpClient(string clientIp, string? username = null, string? password = null)
+        {
+            DatabaseLogger.LogConnection(clientIp, "RDPClient", username, password);
+            AbuseIpDbReporter.ReportRdpClientInBackground(clientIp, username);
         }
 
         private static void SendServerSyncAndControl(Stream sslStream, ushort userChannel)
@@ -362,7 +368,7 @@ namespace RDPHoney
         private static void LogAndDisplayStaticJpg(SslStream sslStream, string clientIp, string username, string password, int width, int height, int bpp = 24)
         {
             Console.WriteLine($"[Credentials Accepted & Logged] IP: {clientIp} | User: '{username}' | Password: '{password}'");
-            DatabaseLogger.LogConnection(clientIp, "RDPClient", username, password);
+            LogAndReportRdpClient(clientIp, username, password);
 
             // Render static JPG
             Console.WriteLine($"Rendering static JPG to {clientIp} ({width}x{height} @ {bpp}bpp)...");
@@ -598,11 +604,11 @@ namespace RDPHoney
             // If client disconnected or timed out without pressing Enter, still log connection and any captured username/password
             if (!string.IsNullOrEmpty(username) || !string.IsNullOrEmpty(password))
             {
-                DatabaseLogger.LogConnection(clientIp, "RDPClient", username, string.IsNullOrEmpty(password) ? null : password);
+                LogAndReportRdpClient(clientIp, username, string.IsNullOrEmpty(password) ? null : password);
             }
             else
             {
-                DatabaseLogger.LogConnection(clientIp, "RDPClient");
+                LogAndReportRdpClient(clientIp);
             }
         }
 

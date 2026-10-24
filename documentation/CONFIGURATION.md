@@ -14,6 +14,10 @@ RDPHoney runs with sensible defaults and can be configured through environment v
 | `STATIC_JPG_PATH` | `assets/desktop.jpg` | Path to the static JPG rendered to authenticated users. |
 | `STATIC_IMAGE_PATH` | *(alias for `STATIC_JPG_PATH`)* | Alternative alias for `STATIC_JPG_PATH`. |
 | `AUTO_BAN_RDP_CLIENTS` | `true` | Drop connections from IP addresses already logged as RDP clients. Set to `false` while testing from your own machine. |
+| `ABUSEIPDB_API_KEY` | *(empty)* | AbuseIPDB APIv2 key. When set, banned `RDPClient` IPs are automatically reported to AbuseIPDB (`/api/v2/report`). |
+| `ABUSEIPDB_ENABLED` | `true` | Enable or disable automatic AbuseIPDB reporting when `ABUSEIPDB_API_KEY` is configured. |
+| `ABUSEIPDB_CATEGORIES` | `18,15` | Comma-separated AbuseIPDB category IDs (`18` = Brute-Force, `15` = Hacking). |
+| `ABUSEIPDB_EXCLUDED_IPS` | *(empty)* | Comma-separated list of IPs to never report. Private/loopback IPs and the host's own public IP are excluded automatically. |
 
 ## Customizing the static JPG
 

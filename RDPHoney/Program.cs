@@ -21,6 +21,16 @@ class Program
         RdpScreenRenderer.EnsureDefaultStaticJpgExists();
         Console.WriteLine($"Static desktop image ready: {RdpScreenRenderer.GetStaticJpgPath()}");
 
+        if (AbuseIpDbReporter.IsEnabled())
+        {
+            string? ownIp = AbuseIpDbReporter.GetOwnPublicIp();
+            Console.WriteLine($"AbuseIPDB auto-reporting enabled (Categories: {AbuseIpDbReporter.GetCategories()}, Protected home IP: {ownIp ?? "private/loopback"})");
+        }
+        else
+        {
+            Console.WriteLine("AbuseIPDB auto-reporting disabled (set ABUSEIPDB_API_KEY to enable).");
+        }
+
         var server = new EnhancedRDPServerHoneypot();
 
         Console.CancelKeyPress += (sender, eventArgs) =>

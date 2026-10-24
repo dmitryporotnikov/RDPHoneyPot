@@ -6,13 +6,17 @@ services:
       dockerfile: Dockerfile
     container_name: rdphoney
     restart: unless-stopped
-    # Use host network mode on Linux so the honeypot receives the real client IP (avoids docker-proxy SNAT)
-    network_mode: host
+    ports:
+      - "${HONEYPOT_PORT:-3389}:${HONEYPOT_PORT:-3389}"
     environment:
       - DATABASE_PATH=/app/data/RdpHoneypotLogs.db
       - HONEYPOT_PORT=${HONEYPOT_PORT:-3389}
       - STATIC_JPG_PATH=/app/assets/desktop.jpg
       - AUTO_BAN_RDP_CLIENTS=${AUTO_BAN_RDP_CLIENTS:-true}
+      - ABUSEIPDB_API_KEY=${ABUSEIPDB_API_KEY:-}
+      - ABUSEIPDB_ENABLED=${ABUSEIPDB_ENABLED:-true}
+      - ABUSEIPDB_CATEGORIES=${ABUSEIPDB_CATEGORIES:-18,15}
+      - ABUSEIPDB_EXCLUDED_IPS=${ABUSEIPDB_EXCLUDED_IPS:-}
     volumes:
       # Host bind mount: exposes database directly on host machine (./data/RdpHoneypotLogs.db)
       - ./data:/app/data
@@ -24,7 +28,8 @@ services:
     image: ghcr.io/coleifer/sqlite-web:latest
     container_name: rdphoney-db-admin
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "${DB_ADMIN_PORT:-8080}:${DB_ADMIN_PORT:-8080}"
     volumes:
       - ./data:/data
     entrypoint:
