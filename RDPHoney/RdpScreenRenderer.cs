@@ -220,63 +220,119 @@ namespace RDPHoney
             return buffer;
         }
 
-        public static void SendBitmapUpdate(Stream stream, byte[] rgbPixels, int width, int height)
+        public static void SendBitmapUpdate(Stream stream, byte[] rgbPixels, int width, int height, int bpp = 24)
         {
-            // Send uncompressed 24bpp BGR strips via RDP Fast-Path Bitmap Updates
-            // Each strip covers 'stripHeight' rows to keep individual packet size under 32KB
-            int stripHeight = Math.Max(1, 24000 / (width * 3)); // usually 10-16 rows for 800-1920 width
+            SendBitmapRegionUpdate(stream, rgbPixels, width, height, 0, 0, width, height, bpp);
+        }
 
-            for (int top = 0; top < height; top += stripHeight)
+        public static void SendBitmapRegionUpdate(
+            Stream stream,
+            byte[] rgbPixels,
+            int screenWidth,
+            int screenHeight,
+            int regionX,
+            int regionY,
+            int regionW,
+            int regionH,
+            int bpp = 24)
+        {
+            if (bpp != 15 && bpp != 16 && bpp != 24 && bpp != 32)
             {
-                int currentStripH = Math.Min(stripHeight, height - top);
+                bpp = 24;
+            }
+
+            int bytesPerPixel = bpp switch
+            {
+                15 or 16 => 2,
+                32 => 4,
+                _ => 3
+            };
+
+            // RDP bitmap coordinates and width must be multiples of 4
+            int left = Math.Max(0, regionX & ~3);
+            int rightBound = Math.Min(screenWidth, regionX + regionW);
+            int alignedWidth = Math.Max(4, ((rightBound - left) + 3) & ~3);
+            int topBound = Math.Max(0, regionY);
+            int bottomBound = Math.Min(screenHeight, regionY + regionH);
+
+            if (bottomBound <= topBound)
+            {
+                return;
+            }
+
+            // Send uncompressed strips via RDP Fast-Path Bitmap Updates
+            // Each strip covers 'stripHeight' rows to keep individual packet size well under 16KB
+            int stripHeight = Math.Max(1, 14000 / (alignedWidth * bytesPerPixel));
+
+            for (int top = topBound; top < bottomBound; top += stripHeight)
+            {
+                int currentStripH = Math.Min(stripHeight, bottomBound - top);
                 int bottom = top + currentStripH - 1;
 
-                int stripPixelBytes = width * currentStripH * 3;
-                byte[] bgrData = new byte[stripPixelBytes];
+                int stripPixelBytes = alignedWidth * currentStripH * bytesPerPixel;
+                byte[] pixelData = new byte[stripPixelBytes];
 
-                // In RDP standard uncompressed bitmap, pixels are bottom-up BGR
+                // In RDP standard uncompressed bitmap, pixels are bottom-up
                 for (int row = 0; row < currentStripH; row++)
                 {
                     int srcY = top + row;
                     int destRow = currentStripH - 1 - row; // bottom-up
 
-                    int srcOffset = srcY * width * 3;
-                    int destOffset = destRow * width * 3;
+                    int srcRowOffset = srcY * screenWidth * 3;
+                    int destOffset = destRow * alignedWidth * bytesPerPixel;
 
-                    for (int x = 0; x < width; x++)
+                    for (int x = 0; x < alignedWidth; x++)
                     {
-                        byte r = rgbPixels[srcOffset + x * 3];
-                        byte g = rgbPixels[srcOffset + x * 3 + 1];
-                        byte b = rgbPixels[srcOffset + x * 3 + 2];
+                        int srcX = Math.Min(screenWidth - 1, left + x);
+                        int srcPx = srcRowOffset + srcX * 3;
+                        byte r = rgbPixels[srcPx];
+                        byte g = rgbPixels[srcPx + 1];
+                        byte b = rgbPixels[srcPx + 2];
 
-                        bgrData[destOffset + x * 3] = b;     // Blue
-                        bgrData[destOffset + x * 3 + 1] = g; // Green
-                        bgrData[destOffset + x * 3 + 2] = r; // Red
+                        int pxOff = destOffset + x * bytesPerPixel;
+                        if (bpp == 24)
+                        {
+                            pixelData[pxOff] = b;     // Blue
+                            pixelData[pxOff + 1] = g; // Green
+                            pixelData[pxOff + 2] = r; // Red
+                        }
+                        else if (bpp == 32)
+                        {
+                            pixelData[pxOff] = b;     // Blue
+                            pixelData[pxOff + 1] = g; // Green
+                            pixelData[pxOff + 2] = r; // Red
+                            pixelData[pxOff + 3] = 0xFF;
+                        }
+                        else if (bpp == 16)
+                        {
+                            // RGB565 little-endian
+                            ushort rgb565 = (ushort)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+                            pixelData[pxOff] = (byte)(rgb565 & 0xFF);
+                            pixelData[pxOff + 1] = (byte)((rgb565 >> 8) & 0xFF);
+                        }
+                        else // 15 bpp (RGB555)
+                        {
+                            ushort rgb555 = (ushort)(((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
+                            pixelData[pxOff] = (byte)(rgb555 & 0xFF);
+                            pixelData[pxOff + 1] = (byte)((rgb555 >> 8) & 0xFF);
+                        }
                     }
                 }
 
-                // Construct TS_UPDATE_BITMAP_DATA
-                // numberRectangles (2 bytes) = 1
-                // destLeft (2) = 0, destTop (2) = top, destRight (2) = width - 1, destBottom (2) = bottom
-                // width (2) = width, height (2) = currentStripH
-                // bitsPerPixel (2) = 24
-                // flags (2) = 0x0000
-                // bitmapLength (2) = stripPixelBytes
-                // bitmapData = bgrData
-
-                // Payload:
+                // TS_UPDATE_BITMAP_DATA:
                 // updateType (2 bytes, LE: 0x0001 = UPDATE_TYPE_BITMAP)
                 // numberRectangles (2 bytes, LE: 0x0001)
                 // Rectangle Header (18 bytes)
                 // Bitmap Data (stripPixelBytes)
                 int updateDataLength = 2 + 2 + 18 + stripPixelBytes;
 
-                // Total Fast-Path PDU length:
+                // Total Fast-Path PDU length (MS-RDPBCGR 2.2.9.1.2 & 2.2.9.1.2.1):
                 // fpOutputHeader (1 byte: 0x00)
                 // length1 & length2 (2 bytes: 0x8000 | totalLength)
                 // updateHeader (1 byte: 0x01 = FASTPATH_UPDATETYPE_BITMAP)
-                // updateDataLength
-                int totalLength = 1 + 2 + 1 + updateDataLength;
+                // size (2 bytes, LE: updateDataLength)
+                // updateData (updateDataLength bytes)
+                int totalLength = 1 + 2 + 1 + 2 + updateDataLength;
 
                 using var ms = new MemoryStream(totalLength);
 
@@ -285,24 +341,25 @@ namespace RDPHoney
                 ms.WriteByte((byte)(0x80 | ((totalLength >> 8) & 0xFF)));
                 ms.WriteByte((byte)(totalLength & 0xFF));
 
-                // Update Header: FASTPATH_UPDATETYPE_BITMAP (0x01)
+                // TS_FP_UPDATE Header: updateHeader (1 byte) + size (2 bytes LE)
                 ms.WriteByte(RdpProtocolConstants.FASTPATH_UPDATETYPE_BITMAP);
+                WriteUInt16LE(ms, (ushort)updateDataLength);
 
                 // TS_UPDATE_BITMAP_DATA
                 WriteUInt16LE(ms, 1); // updateType = UPDATE_TYPE_BITMAP (1)
                 WriteUInt16LE(ms, 1); // numberRectangles = 1
 
                 // Rectangle Header (18 bytes)
-                WriteUInt16LE(ms, 0); // destLeft
+                WriteUInt16LE(ms, (ushort)left); // destLeft
                 WriteUInt16LE(ms, (ushort)top); // destTop
-                WriteUInt16LE(ms, (ushort)(width - 1)); // destRight
+                WriteUInt16LE(ms, (ushort)(left + alignedWidth - 1)); // destRight
                 WriteUInt16LE(ms, (ushort)bottom); // destBottom
-                WriteUInt16LE(ms, (ushort)width); // width
+                WriteUInt16LE(ms, (ushort)alignedWidth); // width
                 WriteUInt16LE(ms, (ushort)currentStripH); // height
-                WriteUInt16LE(ms, 24); // bitsPerPixel
+                WriteUInt16LE(ms, (ushort)bpp); // bitsPerPixel
                 WriteUInt16LE(ms, 0); // flags (uncompressed bottom-up)
                 WriteUInt16LE(ms, (ushort)stripPixelBytes); // bitmapLength
-                ms.Write(bgrData, 0, bgrData.Length);
+                ms.Write(pixelData, 0, pixelData.Length);
 
                 byte[] packet = ms.ToArray();
                 stream.Write(packet, 0, packet.Length);

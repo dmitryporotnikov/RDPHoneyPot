@@ -76,6 +76,14 @@ namespace RDPHoney.Tests
             Assert.True(output.Length > 0);
             // Verify first byte is Fast-Path output header (0x00)
             Assert.Equal(0x00, output[0]);
+
+            // Verify TS_FP_UPDATE header: byte 3 = FASTPATH_UPDATETYPE_BITMAP (0x01), bytes 4..5 = size, bytes 6..7 = updateType (0x0001)
+            int pduLen = ((output[1] & 0x7F) << 8) | output[2];
+            Assert.Equal(0x01, output[3]); // FASTPATH_UPDATETYPE_BITMAP
+            ushort updateSize = BitConverter.ToUInt16(output, 4);
+            Assert.Equal(pduLen - 6, updateSize);
+            Assert.Equal(1, BitConverter.ToUInt16(output, 6)); // UPDATE_TYPE_BITMAP
+            Assert.Equal(1, BitConverter.ToUInt16(output, 8)); // numberRectangles = 1
         }
     }
 }

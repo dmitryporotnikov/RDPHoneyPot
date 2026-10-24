@@ -15,6 +15,7 @@ namespace RDPHoney.Tests
             Assert.Equal(19, packet.Length);
             Assert.Equal(0x03, packet[0]); // TPKT Version
             Assert.Equal(19, packet[3]); // Total length
+            Assert.Equal(0x0E, packet[4]); // X.224 Length Indicator (14 bytes)
             Assert.Equal(RdpProtocolConstants.X224_TPDU_CC, packet[5]); // Connection Confirm (0xD0)
             Assert.Equal(RdpProtocolConstants.RDP_NEG_RSP, packet[11]); // RDP_NEG_RSP (0x02)
             Assert.Equal(0x01, packet[15]); // PROTOCOL_SSL
@@ -23,7 +24,7 @@ namespace RDPHoney.Tests
         [Fact]
         public void BuildMcsConnectResponse_GeneratesValidBerPacketWithGcc()
         {
-            byte[] packet = RdpPacketHelper.BuildMcsConnectResponse();
+            byte[] packet = RdpPacketHelper.BuildMcsConnectResponse(0x00000003, channelCount: 3);
 
             Assert.True(packet.Length > 50);
             Assert.Equal(0x03, packet[0]); // TPKT Version
@@ -150,6 +151,41 @@ namespace RDPHoney.Tests
             ms.Write(passBytes, 0, passBytes.Length);
 
             byte[] pdu = ms.ToArray();
+            var result = RdpPacketHelper.ExtractCredentialsFromInfoPacket(pdu, 0, pdu.Length);
+
+            Assert.Equal(user, result.username);
+            Assert.Equal(pass, result.password);
+            Assert.Equal(domain, result.domain);
+        }
+
+        [Fact]
+        public void ExtractCredentialsFromInfoPacket_HandlesStandardMsRdpbcgrNullTerminatedPacket()
+        {
+            string domain = "";
+            string user = "AdminUser";
+            string pass = "S3cretP@ss";
+
+            byte[] domainBytes = Encoding.Unicode.GetBytes(domain);
+            byte[] userBytes = Encoding.Unicode.GetBytes(user);
+            byte[] passBytes = Encoding.Unicode.GetBytes(pass);
+            byte[] nullTerm = new byte[] { 0x00, 0x00 };
+
+            using var ms = new System.IO.MemoryStream();
+            ms.Write(new byte[] { 0x40, 0x00, 0x00, 0x00 }, 0, 4); // SEC_INFO_PKT
+            ms.Write(new byte[] { 0x09, 0x04, 0x00, 0x00 }, 0, 4); // CodePage (4 bytes)
+            ms.Write(BitConverter.GetBytes(RdpProtocolConstants.INFO_UNICODE | RdpProtocolConstants.INFO_AUTOLOGON), 0, 4); // flags
+            ms.Write(BitConverter.GetBytes((ushort)domainBytes.Length), 0, 2); // cbDomain = 0
+            ms.Write(BitConverter.GetBytes((ushort)userBytes.Length), 0, 2);
+            ms.Write(BitConverter.GetBytes((ushort)passBytes.Length), 0, 2);
+            ms.Write(new byte[] { 0x00, 0x00, 0x00, 0x00 }, 0, 4); // cbAltShell, cbWorkDir
+            ms.Write(domainBytes, 0, domainBytes.Length);
+            ms.Write(nullTerm, 0, 2); // mandatory null terminator after Domain
+            ms.Write(userBytes, 0, userBytes.Length);
+            ms.Write(nullTerm, 0, 2); // mandatory null terminator after UserName
+            ms.Write(passBytes, 0, passBytes.Length);
+            ms.Write(nullTerm, 0, 2); // mandatory null terminator after Password
+
+            byte[] pdu = RdpPacketHelper.WrapSendDataIndication(ms.ToArray(), 1004, 1003);
             var result = RdpPacketHelper.ExtractCredentialsFromInfoPacket(pdu, 0, pdu.Length);
 
             Assert.Equal(user, result.username);

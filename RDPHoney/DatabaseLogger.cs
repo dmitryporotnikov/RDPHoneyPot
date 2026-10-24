@@ -132,7 +132,7 @@ namespace RDPHoney
 
         public static void LogConnection(string ipAddress, string type, string? username = null, string? password = null)
         {
-            if (!_isInitialized)
+            if (!_isInitialized || !File.Exists(_dbFilePath))
             {
                 InitializeDatabase();
             }
@@ -143,6 +143,14 @@ namespace RDPHoney
                 using (var command = connection.CreateCommand())
                 {
                     command.CommandText = @"
+                        CREATE TABLE IF NOT EXISTS ConnectionLogs (
+                            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            IPAddress TEXT NOT NULL,
+                            Timestamp TEXT NOT NULL,
+                            Type TEXT NOT NULL,
+                            Username TEXT NULL,
+                            Password TEXT NULL
+                        );
                         INSERT INTO ConnectionLogs (IPAddress, Timestamp, Type, Username, Password) 
                         VALUES ($IPAddress, $Timestamp, $Type, $Username, $Password);";
                     command.Parameters.AddWithValue("$IPAddress", ipAddress);
@@ -157,7 +165,7 @@ namespace RDPHoney
 
         public static bool CheckIfRdpClientExists(string ipAddress)
         {
-            if (!_isInitialized)
+            if (!_isInitialized || !File.Exists(_dbFilePath))
             {
                 InitializeDatabase();
             }

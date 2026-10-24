@@ -27,6 +27,11 @@ namespace RDPHoney
             req.CertificateExtensions.Add(sanBuilder.Build());
 
             req.CertificateExtensions.Add(
+                new X509KeyUsageExtension(
+                    X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment | X509KeyUsageFlags.DataEncipherment,
+                    false));
+
+            req.CertificateExtensions.Add(
                 new X509EnhancedKeyUsageExtension(
                     new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false));
 

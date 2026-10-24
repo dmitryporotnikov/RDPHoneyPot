@@ -7,6 +7,7 @@ using Xunit;
 
 namespace RDPHoney.Tests
 {
+    [Collection("DatabaseTests")]
     public class DatabaseLoggerTests : IDisposable
     {
         private readonly string _testDbPath;

@@ -26,6 +26,8 @@ namespace RDPHoney
         public const byte RDP_NEG_FAILURE = 0x03;
 
         // MCS PDUs
+        public const byte MCS_ERECT_DOMAIN_REQUEST = 0x04;
+        public const byte MCS_DISCONNECT_PROVIDER_ULTIMATUM = 0x21;
         public const byte MCS_ATTACH_USER_REQUEST = 0x28;
         public const byte MCS_ATTACH_USER_CONFIRM = 0x2E;
         public const byte MCS_CHANNEL_JOIN_REQUEST = 0x38;
@@ -34,8 +36,30 @@ namespace RDPHoney
         public const byte MCS_SEND_DATA_INDICATION = 0x68;
 
         // Channels
+        public const ushort MCS_SERVER_USER_ID = 1002;
         public const ushort MCS_USERCHANNEL_BASE = 1002;
         public const ushort MCS_IO_CHANNEL = 1003;
+
+        // Security Header flags
+        public const ushort SEC_INFO_PKT = 0x0040;
+        public const ushort SEC_LICENSE_PKT = 0x0080;
+
+        // Share Control Header PDU Types
+        public const ushort TS_PDUTYPE_DEMANDACTIVEPDU = 0x0011;
+        public const ushort TS_PDUTYPE_CONFIRMACTIVEPDU = 0x0013;
+        public const ushort TS_PDUTYPE_DEACTIVATEALLPDU = 0x0016;
+        public const ushort TS_PDUTYPE_DATAPDU = 0x0017;
+
+        // Share Data Header PDU Type 2
+        public const byte TS_PDUTYPE2_UPDATE = 0x02;
+        public const byte TS_PDUTYPE2_CONTROL = 0x14;
+        public const byte TS_PDUTYPE2_POINTER = 0x1B;
+        public const byte TS_PDUTYPE2_INPUT = 0x1C;
+        public const byte TS_PDUTYPE2_SYNCHRONIZE = 0x1F;
+        public const byte TS_PDUTYPE2_REFRESH_RECT = 0x21;
+        public const byte TS_PDUTYPE2_SUPPRESS_OUTPUT = 0x23;
+        public const byte TS_PDUTYPE2_FONT_LIST = 0x27;
+        public const byte TS_PDUTYPE2_FONTMAP = 0x28;
 
         // TS_INFO_PACKET flags
         public const uint INFO_UNICODE = 0x00000010;
